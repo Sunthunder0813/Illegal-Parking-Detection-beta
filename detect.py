@@ -19,3 +19,29 @@ def names_to_indices(names_list):
     return [name_to_id[name] for name in names_list if name in name_to_id]
 
 CLASSES = names_to_indices(CLASSES_NAMES)
+
+from ultralytics import YOLO
+
+MODEL_PATH = "models/yolov8n.pt"
+_model = None
+
+def get_model():
+    global _model
+    if _model is None:
+        _model = YOLO(MODEL_PATH)
+    return _model
+
+def detect(frames):
+    """
+    Detect objects in a list of frames using YOLO and return results.
+    Returns a list of results, one per frame.
+    """
+    model = get_model()
+    results = model.track(
+        frames,
+        persist=True,
+        tracker="bytetrack.yaml",
+        verbose=False,
+        classes=CLASSES
+    )
+    return results
