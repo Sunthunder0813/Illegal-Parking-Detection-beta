@@ -12,14 +12,11 @@ import contextlib
 import io
 
 from detect import NAMES, CLASSES, detect  # Import detect function as well
+from config import CAM1_URL, CAM2_URL, SAVE_DIR, DATABASE_URL, FIREBASE_KEY_PATH, UPLOAD_COOLDOWN
 
 # =============================
 # CONFIG & FIREBASE
 # =============================
-DATABASE_URL = "https://illegal-parking-detectio-a8aae-default-rtdb.asia-southeast1.firebasedatabase.app/"
-FIREBASE_KEY_PATH = "illegal-parking-detectio-a8aae-firebase-adminsdk-fbsvc-7181a051dc.json"
-
-SAVE_DIR = "static/violations"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 class FirebaseHandler:
@@ -32,24 +29,25 @@ class FirebaseHandler:
         except Exception as e:
             print(f"Firebase Error: {e}")
 
-    def report_violation(self, cam_name, count, frame):
-        if count > 0:
-            threading.Thread(target=self._process_local_save, args=(cam_name, count, frame.copy()), daemon=True).start()
+    def report_violation(self, cam_names, total_count, merged_frame):
+        """Saves merged image locally and pushes metadata to Firebase."""
+        if total_count > 0:
+            threading.Thread(target=self._process_local_save, args=(cam_names, total_count, merged_frame.copy()), daemon=True).start()
 
-    def _process_local_save(self, cam_name, count, frame):
+    def _process_local_save(self, cam_names, total_count, merged_frame):
         try:
             timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{cam_name}_{timestamp_str}.jpg"
+            filename = f"{'_'.join(cam_names)}_{timestamp_str}.jpg"
             filepath = os.path.join(SAVE_DIR, filename)
-            cv2.imwrite(filepath, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            cv2.imwrite(filepath, merged_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
             self.ref.push({
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "camera": cam_name,
-                "vehicle_count": count,
+                "cameras": cam_names,
+                "vehicle_count": total_count,
                 "local_file": filename,
                 "status": "Illegal Parking Logged Locally"
             })
-            print(f"Logged: {cam_name} | Image saved to {filepath}")
+            print(f"Logged: {cam_names} | Image saved to {filepath}")
         except Exception as e:
             print(f"Local Save Error: {e}")
 
@@ -127,9 +125,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--webcam', action='store_true', help='Use local webcams instead of IP cameras')
 args, unknown = parser.parse_known_args()
 
-CAM1_URL = "rtsp://192.168.18.2:554/stream"
-CAM2_URL = "rtsp://192.168.18.113:554/stream"
-
 # =============================
 # CAMERA INITIALIZATION
 # =============================
@@ -160,7 +155,6 @@ else:
 app = Flask(__name__)
 
 def gen_frames():
-    UPLOAD_COOLDOWN = 30
     last_upload_time = 0
 
     while True:
@@ -181,20 +175,29 @@ def gen_frames():
             time.sleep(0.05)
             continue
 
-        # Use detect.detect instead of model.track
         results = detect(frames)  # Should return a list of result objects, one per frame
 
-        current_time = time.time()
-        for i, res in enumerate(results):
-            count = len(res.boxes)
-            if count > 0 and current_time - last_upload_time > UPLOAD_COOLDOWN:
-                db_client.report_violation(names[i], count, res.plot())
-                last_upload_time = current_time
+        # Prepare merged snapshot for violation
+        plotted_frames = [res.plot() for res in results]
+        if len(plotted_frames) == 2:
+            merged_snapshot = cv2.hconcat(plotted_frames)
+        elif len(plotted_frames) == 1:
+            merged_snapshot = plotted_frames[0]
+        else:
+            merged_snapshot = None
 
-        combined = cv2.hconcat([res.plot() for res in results])
-        _, buffer = cv2.imencode('.jpg', combined)
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        current_time = time.time()
+        total_count = sum(len(res.boxes) for res in results)
+        if merged_snapshot is not None and total_count > 0 and current_time - last_upload_time > UPLOAD_COOLDOWN:
+            db_client.report_violation(names, total_count, merged_snapshot)
+            last_upload_time = current_time
+
+        if merged_snapshot is not None:
+            _, buffer = cv2.imencode('.jpg', merged_snapshot)
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        else:
+            time.sleep(0.05)
 
 @app.route('/')
 def index():

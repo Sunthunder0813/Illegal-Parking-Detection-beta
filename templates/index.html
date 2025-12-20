@@ -59,6 +59,12 @@
     </div>
 
     <div class="container">
+        {% if notif %}
+        <div class="alert alert-success alert-dismissible fade show mt-3" role="alert">
+            {{ notif }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endif %}
         <div class="video-container">
             <img src="{{ url_for('video_feed') }}" class="video-frame" alt="Live Tracking Feed">
         </div>
