@@ -1,7 +1,5 @@
 # Classes
 NAMES = {
-    0: "person",
-    1: "bicycle",
     2: "car",
     3: "motorcycle",
     5: "bus",
@@ -21,8 +19,8 @@ def names_to_indices(names_list):
 CLASSES = names_to_indices(CLASSES_NAMES)
 
 from ultralytics import YOLO
+from config import MODEL_PATH
 
-MODEL_PATH = "models/yolov8n.pt"
 _model = None
 
 def get_model():
