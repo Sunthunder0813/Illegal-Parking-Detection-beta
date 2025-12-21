@@ -22,7 +22,6 @@ logger = logging.getLogger("ParkingApp")
 os.makedirs(config.SAVE_DIR, exist_ok=True)
 
 # Polygons for violation detection
-# Note: You may need to update these coordinates to match your RTSP stream resolution
 ZONE_CAM1 = np.array([[100, 300], [500, 300], [600, 700], [50, 700]], np.int32)
 ZONE_CAM2 = np.array([[200, 200], [400, 200], [400, 600], [200, 600]], np.int32)
 
@@ -89,6 +88,12 @@ class VehicleTracker:
                 
                 duration = now - self.first_seen[cam_name][obj_id]
                 
+                # Visual Indicator for Timer
+                x1, y1, x2, y2 = map(int, box)
+                timer_text = f"Parked: {int(duration)}s"
+                color = (0, 0, 255) if duration >= self.threshold else (0, 255, 255)
+                cv2.putText(frame, timer_text, (x1, y1 - 30), 0, 0.5, color, 2)
+
                 if obj_id not in self.violated_ids[cam_name] and duration >= self.threshold:
                     self.violated_ids[cam_name].add(obj_id)
                     self.last_capture[cam_name][obj_id] = now
@@ -107,7 +112,6 @@ class VehicleTracker:
 tracker = VehicleTracker(config.VIOLATION_TIME_THRESHOLD)
 
 class StreamManager:
-    """Handles RTSP reconnection logic for IP Cameras"""
     def __init__(self, url, name):
         self.url = url
         self.name = name
@@ -122,12 +126,12 @@ class StreamManager:
             if ret:
                 self.frame = frame
             else:
+                self.frame = None # Explicitly set to None to trigger placeholder logic
                 logger.warning(f"Lost connection to {self.name}. Reconnecting...")
                 self.cap.release()
                 time.sleep(5)
                 self.cap = cv2.VideoCapture(self.url)
 
-# Initialize streams with config URLs
 cam1 = StreamManager(config.CAM1_URL, "Camera_1")
 cam2 = StreamManager(config.CAM2_URL, "Camera_2")
 
@@ -149,28 +153,32 @@ def index():
 
 def gen_frames():
     while True:
-        streams = []
-        if cam1.frame is not None: streams.append(("Camera_1", cam1.frame.copy()))
-        if cam2.frame is not None: streams.append(("Camera_2", cam2.frame.copy()))
+        available_streams = []
+        if cam1.frame is not None: available_streams.append(("Camera_1", cam1.frame.copy()))
+        if cam2.frame is not None: available_streams.append(("Camera_2", cam2.frame.copy()))
         
-        if not streams:
-            time.sleep(0.1)
+        if not available_streams:
+            # Both cameras offline: Show warning
+            black = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(black, "NO CAMERA CONNECTION", (120, 240), 0, 1, (0, 0, 255), 2)
+            _, buffer = cv2.imencode('.jpg', black)
+            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            time.sleep(1)
             continue
 
-        # Run AI Inference (Hailo-8L)
-        frames_to_ai = [f for n, f in streams]
-        results = detect(frames_to_ai)
+        # AI Detection
+        raw_frames = [f for n, f in available_streams]
+        results = detect(raw_frames)
 
-        processed = []
+        processed_map = {}
         for i, res in enumerate(results):
-            cam_name, frame = streams[i]
+            cam_name, frame = available_streams[i]
             cv2.polylines(frame, [tracker.zones[cam_name]], True, (0, 255, 0), 2)
             
             formatted_detections = []
             if res.boxes.id is not None:
                 boxes = res.boxes.xyxy.cpu().numpy()
                 ids = res.boxes.id.cpu().numpy()
-                
                 for box, obj_id in zip(boxes, ids):
                     formatted_detections.append((int(obj_id), box))
                     x1, y1, x2, y2 = map(int, box)
@@ -178,14 +186,20 @@ def gen_frames():
                     cv2.putText(frame, f"ID:{int(obj_id)}", (x1, y1-10), 0, 0.5, (255,0,0), 2)
 
             tracker.process(cam_name, formatted_detections, frame)
-            processed.append(cv2.resize(frame, (640, 480)))
+            processed_map[cam_name] = cv2.resize(frame, (640, 480))
 
-        # Layout Logic
-        if len(processed) == 2:
-            combined = cv2.hconcat(processed)
-        else:
-            combined = processed[0]
+        # Layout Logic: Maintain dual view even if one camera is gone
+        final_layout = []
+        for name in ["Camera_1", "Camera_2"]:
+            if name in processed_map:
+                final_layout.append(processed_map[name])
+            else:
+                # Placeholder for offline camera
+                offline_box = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(offline_box, f"{name} OFFLINE", (180, 240), 0, 0.8, (0, 0, 255), 2)
+                final_layout.append(offline_box)
 
+        combined = cv2.hconcat(final_layout)
         _, buffer = cv2.imencode('.jpg', combined)
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
