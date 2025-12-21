@@ -10,10 +10,13 @@ from flask import Flask, Response, render_template_string
 from app_detect import detect
 import config
 
-# --- Initialization ---
+# --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
+if not os.path.exists(config.SAVE_DIR):
+    os.makedirs(config.SAVE_DIR)
 
+# --- Firebase ---
 try:
     if not firebase_admin._apps:
         cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
@@ -22,9 +25,6 @@ try:
 except Exception as e:
     logger.error(f"Firebase Init Error: {e}")
     ref = None
-
-if not os.path.exists(config.SAVE_DIR):
-    os.makedirs(config.SAVE_DIR)
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 
@@ -56,7 +56,7 @@ class ByteTrackLite:
             if best_id is not None:
                 new_tracks[best_id] = {'box': box, 'cls': cid, 'last_seen': self.frame_count}
                 self.tracked_objects.pop(best_id, None)
-            elif score >= 0.3:
+            elif score >= config.DETECTION_THRESHOLD:
                 new_tracks[self.next_id] = {'box': box, 'cls': cid, 'last_seen': self.frame_count}
                 self.next_id += 1
 
@@ -72,6 +72,7 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
+        # Define parking zones for each camera
         self.zones = {
             "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
             "Camera_2": np.array([[200, 200], [1000, 200], [1000, 600], [200, 600]])
@@ -80,6 +81,7 @@ class ParkingMonitor:
     def process(self, name, res, frame):
         fh, fw = frame.shape[:2]
         cv2.polylines(frame, [self.zones[name]], True, (0, 255, 0), 2)
+        
         pixel_boxes = [[b[0]*fw, b[1]*fh, b[2]*fw, b[3]*fh] for b in res.xyxy]
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
         now = time.time()
@@ -89,20 +91,23 @@ class ParkingMonitor:
             label = CLASS_NAMES.get(d['cls'], "OBJ")
             center = ((x1+x2)//2, (y1+y2)//2)
 
+            # Person detection (Yellow box, no timer)
             if d['cls'] == 0:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
                 continue
 
+            # Vehicle in Zone logic
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
                 self.timers.setdefault((name, tid), now)
                 dur = int(now - self.timers[(name, tid)])
                 
-                is_v = dur >= config.VIOLATION_TIME_THRESHOLD
-                color = (0, 0, 255) if is_v else (0, 255, 255)
+                is_violation = dur >= config.VIOLATION_TIME_THRESHOLD
+                color = (0, 0, 255) if is_violation else (0, 255, 255)
+                
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, f"{label} #{tid}: {dur}s", (x1, y1-8), 0, 0.6, color, 2)
 
-                if is_v:
+                if is_violation:
                     last_up = self.last_upload_time.get((name, tid), 0)
                     if now - last_up > config.REPEAT_CAPTURE_INTERVAL:
                         self.log_violation(name, tid, label, frame)
@@ -112,13 +117,21 @@ class ParkingMonitor:
 
     def log_violation(self, cam, tid, label, frame):
         ts = int(time.time())
-        path = os.path.join(config.SAVE_DIR, f"{cam}_{tid}_{ts}.jpg")
+        filename = f"{cam}_{tid}_{ts}.jpg"
+        path = os.path.join(config.SAVE_DIR, filename)
         cv2.imwrite(path, frame)
         if ref:
             try:
-                ref.push({'camera': cam, 'id': tid, 'type': label, 'time': ts, 'image_path': path})
+                ref.push({
+                    'camera': cam, 
+                    'object_id': tid, 
+                    'type': label, 
+                    'timestamp': ts, 
+                    'local_path': path
+                })
+                logger.info(f"Violation Logged: {label} on {cam}")
             except Exception as e:
-                logger.error(f"Firebase Error: {e}")
+                logger.error(f"Firebase Push Error: {e}")
 
 class Stream:
     def __init__(self, url):
@@ -166,7 +179,16 @@ def gen():
 
 @app.route('/')
 def index():
-    return render_template_string("<h1>Parking Monitor</h1><img src='/video_feed' width='100%'>")
+    return render_template_string("""
+        <html>
+            <head><title>Parking Monitor</title></head>
+            <body style="background:#111; color:white; text-align:center;">
+                <h1>Illegal Parking Detection - Live</h1>
+                <img src="/video_feed" style="border:2px solid #444; width:90%;">
+                <p>Status: Monitoring Camera 1 and Camera 2</p>
+            </body>
+        </html>
+    """)
 
 @app.route('/video_feed')
 def video_feed():
