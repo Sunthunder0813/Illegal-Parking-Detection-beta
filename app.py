@@ -9,18 +9,13 @@ from flask import Flask, Response, render_template_string
 import firebase_admin
 from firebase_admin import credentials, db
 
-# Local Imports
 from app_detect import detect
 import config
 
-# =============================
-# INITIALIZATION & LOGGING
-# =============================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 os.makedirs(config.SAVE_DIR, exist_ok=True)
 
-# Detection Zones
 ZONE_CAM1 = np.array([[100, 300], [500, 300], [600, 700], [50, 700]], np.int32)
 ZONE_CAM2 = np.array([[200, 200], [400, 200], [400, 600], [200, 600]], np.int32)
 
@@ -33,8 +28,7 @@ class FirebaseHandler:
             self.ref = db.reference('violations_history')
             logger.info("Firebase Connected Successfully")
         except Exception as e:
-            logger.error(f"Firebase Init Error: {e}")
-            self.ref = None
+            logger.error(f"Firebase Init Error: {e}"); self.ref = None
 
     def report_violation(self, cam_name, count, frame):
         if self.ref:
@@ -42,21 +36,16 @@ class FirebaseHandler:
 
     def _upload_task(self, cam_name, count, frame):
         try:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{cam_name}_{timestamp}.jpg"
-            filepath = os.path.join(config.SAVE_DIR, filename)
-            cv2.imwrite(filepath, frame)
-            
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            fname = f"{cam_name}_{ts}.jpg"
+            fpath = os.path.join(config.SAVE_DIR, fname)
+            cv2.imwrite(fpath, frame)
             self.ref.push({
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "camera": cam_name,
-                "vehicle_count": count,
-                "status": "Illegal Parking Detected",
-                "image_path": filename
+                "camera": cam_name, "vehicle_count": count,
+                "status": "Illegal Parking Detected", "image_path": fname
             })
-            logger.info(f"Violation reported for {cam_name}")
-        except Exception as e:
-            logger.error(f"Firebase Upload Failed: {e}")
+        except Exception as e: logger.error(f"Firebase Error: {e}")
 
 db_client = FirebaseHandler()
 
@@ -88,11 +77,8 @@ class VehicleTracker:
                 
                 duration = now - self.first_seen[cam_name][obj_id]
                 x1, y1, x2, y2 = map(int, box)
-                
-                # Logic Visuals
-                timer_text = f"Parked: {int(duration)}s"
                 color = (0, 0, 255) if duration >= self.threshold else (0, 255, 255)
-                cv2.putText(frame, timer_text, (x1, y1 - 30), 0, 0.5, color, 2)
+                cv2.putText(frame, f"Parked: {int(duration)}s", (x1, y1 - 30), 0, 0.5, color, 2)
 
                 if obj_id not in self.violated_ids[cam_name] and duration >= self.threshold:
                     self.violated_ids[cam_name].add(obj_id)
@@ -112,18 +98,14 @@ tracker = VehicleTracker(config.VIOLATION_TIME_THRESHOLD)
 
 class StreamManager:
     def __init__(self, url, name):
-        self.url = url
-        self.name = name
+        self.url, self.name, self.frame, self.active = url, name, None, True
         self.cap = cv2.VideoCapture(url)
-        self.frame = None
-        self.active = True
         threading.Thread(target=self._update, daemon=True).start()
 
     def _update(self):
         while self.active:
             ret, frame = self.cap.read()
-            if ret:
-                self.frame = frame
+            if ret: self.frame = frame
             else:
                 self.frame = None
                 self.cap.release()
@@ -142,34 +124,29 @@ def gen_frames():
         if cam2.frame is not None: streams.append(("Camera_2", cam2.frame.copy()))
         
         if not streams:
-            time.sleep(0.1)
-            continue
+            time.sleep(0.1); continue
 
-        # 1. Hardware Inference
-        raw_images = [f for n, f in streams]
-        results = detect(raw_images)
+        results = detect([f for n, f in streams])
 
-        processed_images = {}
+        processed = {}
         for i, res in enumerate(results):
             cam_name, frame = streams[i]
             h, w = frame.shape[:2]
             cv2.polylines(frame, [tracker.zones[cam_name]], True, (0, 255, 0), 2)
             
-            formatted_dets = []
-            if res.boxes is not None:
-                for box, obj_id in zip(res.boxes.xyxy, res.boxes.id or []):
-                    # Scale coordinates from normalized (0-1) to pixel units
+            formatted = []
+            # Updated safety check for boxes and IDs
+            if res.boxes is not None and res.boxes.id is not None:
+                for box, obj_id in zip(res.boxes.xyxy, res.boxes.id):
                     x1, y1, x2, y2 = int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)
-                    formatted_dets.append((int(obj_id), [x1, y1, x2, y2]))
-                    
+                    formatted.append((int(obj_id), [x1, y1, x2, y2]))
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
                     cv2.putText(frame, f"ID:{int(obj_id)}", (x1, y1-10), 0, 0.5, (255,0,0), 2)
 
-            tracker.process(cam_name, formatted_dets, frame)
-            processed_images[cam_name] = cv2.resize(frame, (640, 480))
+            tracker.process(cam_name, formatted, frame)
+            processed[cam_name] = cv2.resize(frame, (640, 480))
 
-        # 2. UI Concatenation
-        layout = [processed_images.get(n, np.zeros((480, 640, 3), np.uint8)) for n in ["Camera_1", "Camera_2"]]
+        layout = [processed.get(n, np.zeros((480, 640, 3), np.uint8)) for n in ["Camera_1", "Camera_2"]]
         combined = cv2.hconcat(layout)
         _, buffer = cv2.imencode('.jpg', combined, [cv2.IMWRITE_JPEG_QUALITY, 85])
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
