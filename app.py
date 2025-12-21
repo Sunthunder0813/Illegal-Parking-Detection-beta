@@ -56,7 +56,7 @@ class ByteTrackLite:
             if best_id is not None:
                 new_tracks[best_id] = {'box': box, 'cls': cid, 'last_seen': self.frame_count}
                 self.tracked_objects.pop(best_id, None)
-            elif score >= 0.4:
+            elif score >= 0.3:
                 new_tracks[self.next_id] = {'box': box, 'cls': cid, 'last_seen': self.frame_count}
                 self.next_id += 1
 
@@ -90,7 +90,7 @@ class ParkingMonitor:
             center = ((x1+x2)//2, (y1+y2)//2)
 
             if d['cls'] == 0:
-                cv2.rectangle(frame, (x1,y1), (x2,y2), (255,255,0), 1)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
                 continue
 
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
@@ -98,9 +98,9 @@ class ParkingMonitor:
                 dur = int(now - self.timers[(name, tid)])
                 
                 is_v = dur >= config.VIOLATION_TIME_THRESHOLD
-                color = (0,0,255) if is_v else (0,255,255)
-                cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
-                cv2.putText(frame, f"{label} #{tid}: {dur}s", (x1,y1-8), 0, 0.6, color, 2)
+                color = (0, 0, 255) if is_v else (0, 255, 255)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, f"{label} #{tid}: {dur}s", (x1, y1-8), 0, 0.6, color, 2)
 
                 if is_v:
                     last_up = self.last_upload_time.get((name, tid), 0)
@@ -116,8 +116,9 @@ class ParkingMonitor:
         cv2.imwrite(path, frame)
         if ref:
             try:
-                ref.push({'camera': cam, 'id': tid, 'type': label, 'time': ts, 'path': path})
-            except Exception as e: logger.error(f"FB Error: {e}")
+                ref.push({'camera': cam, 'id': tid, 'type': label, 'time': ts, 'image_path': path})
+            except Exception as e:
+                logger.error(f"Firebase Error: {e}")
 
 class Stream:
     def __init__(self, url):
@@ -129,7 +130,8 @@ class Stream:
     def _run(self):
         while True:
             ret, f = self.cap.read()
-            if ret: self.frame = f
+            if ret:
+                self.frame = f
             else:
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
