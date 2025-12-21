@@ -13,6 +13,8 @@ DATABASE_URL = "https://illegal-parking-detectio-a8aae-default-rtdb.asia-southea
 FIREBASE_KEY_PATH = "illegal-parking-detectio-a8aae-firebase-adminsdk-fbsvc-7181a051dc.json"
 
 # Violation Logic
-UPLOAD_COOLDOWN = 30
-VIOLATION_TIME_THRESHOLD = 10  # Seconds
-REPEAT_CAPTURE_INTERVAL = 30   # Seconds
+VIOLATION_TIME_THRESHOLD = 10  # Seconds before it's a violation
+REPEAT_CAPTURE_INTERVAL = 30   # Cooldown between logs for same car
+
+# --- THE MISSING LINE ---
+DETECTION_THRESHOLD = 0.3      # Minimum confidence (0.0 to 1.0)
