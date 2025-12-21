@@ -10,9 +10,9 @@ logger = logging.getLogger("ParkingApp")
 
 class DetectionResult:
     def __init__(self, xyxy, confs, clss):
-        self.xyxy = xyxy      # [N, 4]
-        self.conf = confs     # [N]
-        self.cls = clss       # [N]
+        self.xyxy = xyxy      
+        self.conf = confs     
+        self.cls = clss       
 
 class HailoDetector:
     def __init__(self, hef_path):
@@ -25,7 +25,8 @@ class HailoDetector:
         self.output_vstreams_params = OutputVStreamParams.make(self.network_group)
         self.input_info = self.hef.get_input_vstream_infos()[0]
         self.height, self.width, _ = self.input_info.shape
-        self.vehicle_classes = [2, 3, 5, 7] # COCO: car, motorcycle, bus, truck
+        # Added Class 0 (Person) to the monitored classes
+        self.monitored_classes = [0, 2, 3, 5, 7] 
 
     def preprocess(self, frame):
         return np.expand_dims(cv2.resize(frame, (self.width, self.height)), axis=0)
@@ -36,9 +37,9 @@ class HailoDetector:
         if nms_node:
             detections = raw_out[nms_node[0]]
             for det in detections[0]:
-                if len(det) >= 5 and det[4] > 0.1: # ByteTrack needs low scores
+                if len(det) >= 5 and det[4] > 0.1:
                     cid = int(det[5])
-                    if cid in self.vehicle_classes:
+                    if cid in self.monitored_classes:
                         all_boxes.append([float(det[1]), float(det[0]), float(det[3]), float(det[2])])
                         all_confs.append(float(det[4]))
                         all_clss.append(cid)
