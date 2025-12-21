@@ -26,6 +26,7 @@ class HailoDetector:
         self.input_info = self.hef.get_input_vstream_infos()[0]
         self.height, self.width, _ = self.input_info.shape
 
+        # COCO IDs for Person, Car, Motorcycle, Bus, Truck
         self.monitored_classes = [0, 2, 3, 5, 7]
 
     def preprocess(self, frame):
@@ -34,32 +35,28 @@ class HailoDetector:
 
     def postprocess(self, raw_out):
         all_boxes, all_confs, all_clss = [], [], []
-        # Identify the correct output key
         nms_keys = [k for k in raw_out.keys() if 'nms' in k.lower() or 'output' in k.lower()]
         
         if not nms_keys:
             return DetectionResult(np.array([]), np.array([]), np.array([]))
 
-        # FIX: Ensure we are working with a NumPy array
-        detections = np.array(raw_out[nms_keys[0]])
+        # FIX: Access the ragged data without triggering the 'inhomogeneous shape' error
+        detections_list = raw_out[nms_keys[0]]
 
-        # If it's batched [1, N, 6], squeeze it to [N, 6]
-        if len(detections.shape) == 3:
-            detections = detections[0]
-
-        for det in detections:
-            # Check if detection is valid (contains coordinates, score, and class)
-            if len(det) < 6: continue
-            
-            score = float(det[4])
-            cid = int(det[5])
-            
-            if score > 0.1 and cid in self.monitored_classes:
-                # YOLOv8 HEF format: [ymin, xmin, ymax, xmax, score, cid]
-                # Convert to [xmin, ymin, xmax, ymax] for our tracker
-                all_boxes.append([float(det[1]), float(det[0]), float(det[3]), float(det[2])])
-                all_confs.append(score)
-                all_clss.append(cid)
+        # Hailo NMS output is usually a list of lists (one per class or one per batch)
+        # We iterate through the outer list (batch) and inner list (detections)
+        for batch_item in detections_list:
+            for det in batch_item:
+                # Ensure the detection has data: [ymin, xmin, ymax, xmax, score, class]
+                if len(det) >= 6:
+                    score = float(det[4])
+                    cid = int(det[5])
+                    
+                    if score > 0.15 and cid in self.monitored_classes:
+                        # Convert [ymin, xmin, ymax, xmax] -> [xmin, ymin, xmax, ymax]
+                        all_boxes.append([float(det[1]), float(det[0]), float(det[3]), float(det[2])])
+                        all_confs.append(score)
+                        all_clss.append(cid)
 
         return DetectionResult(np.array(all_boxes), np.array(all_confs), np.array(all_clss))
 
