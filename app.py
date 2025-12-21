@@ -5,7 +5,7 @@ import os
 import datetime
 import numpy as np
 import logging
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template_string
 import firebase_admin
 from firebase_admin import credentials, db
 
@@ -21,15 +21,15 @@ logger = logging.getLogger("ParkingApp")
 
 os.makedirs(config.SAVE_DIR, exist_ok=True)
 
-# Define detection zones (Adjust these coordinates for your cameras)
+# Zones (Ensure these match your stream resolution)
 ZONE_CAM1 = np.array([[100, 300], [500, 300], [600, 700], [50, 700]], np.int32)
 ZONE_CAM2 = np.array([[200, 200], [400, 200], [400, 600], [200, 600]], np.int32)
 
 class FirebaseHandler:
     def __init__(self):
         try:
-            cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
             if not firebase_admin._apps:
+                cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
                 firebase_admin.initialize_app(cred, {'databaseURL': config.DATABASE_URL})
             self.ref = db.reference('violations_history')
             logger.info("Firebase Connected Successfully")
@@ -42,27 +42,31 @@ class FirebaseHandler:
             threading.Thread(target=self._upload_task, args=(cam_name, count, frame.copy()), daemon=True).start()
 
     def _upload_task(self, cam_name, count, frame):
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{cam_name}_{timestamp}.jpg"
-        filepath = os.path.join(config.SAVE_DIR, filename)
-        cv2.imwrite(filepath, frame)
-        
-        self.ref.push({
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "camera": cam_name,
-            "vehicle_count": count,
-            "status": "Illegal Parking Detected",
-            "image_path": filename
-        })
+        try:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{cam_name}_{timestamp}.jpg"
+            filepath = os.path.join(config.SAVE_DIR, filename)
+            cv2.imwrite(filepath, frame)
+            
+            self.ref.push({
+                "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "camera": cam_name,
+                "vehicle_count": count,
+                "status": "Illegal Parking Detected",
+                "image_path": filename
+            })
+            logger.info(f"Violation reported for {cam_name}")
+        except Exception as e:
+            logger.error(f"Upload failed: {e}")
 
 db_client = FirebaseHandler()
 
 class VehicleTracker:
     def __init__(self, threshold):
         self.threshold = threshold
-        self.first_seen = {} # {cam: {id: time}}
+        self.first_seen = {} 
         self.violated_ids = {}
-        self.last_capture = {} # {cam: {id: time}}
+        self.last_capture = {} 
         self.zones = {"Camera_1": ZONE_CAM1, "Camera_2": ZONE_CAM2}
 
     def is_in_zone(self, box, cam_name):
@@ -107,6 +111,7 @@ tracker = VehicleTracker(config.VIOLATION_TIME_THRESHOLD)
 class StreamManager:
     def __init__(self, url, name):
         self.name = name
+        self.url = url
         self.cap = cv2.VideoCapture(url)
         self.frame = None
         threading.Thread(target=self._update, daemon=True).start()
@@ -114,12 +119,30 @@ class StreamManager:
     def _update(self):
         while True:
             ret, frame = self.cap.read()
-            if ret: self.frame = frame
-            else: time.sleep(0.01)
+            if ret:
+                self.frame = frame
+            else:
+                logger.warning(f"Reconnecting to {self.name}...")
+                self.cap.release()
+                time.sleep(2)
+                self.cap = cv2.VideoCapture(self.url)
 
 cam1 = StreamManager(config.CAM1_URL, "Camera_1")
 cam2 = StreamManager(config.CAM2_URL, "Camera_2")
 app = Flask(__name__)
+
+# --- ADDED INDEX ROUTE TO FIX 404 ---
+@app.route('/')
+def index():
+    return render_template_string("""
+        <html>
+            <head><title>Hailo Parking Monitor</title></head>
+            <body style="background: #111; color: white; text-align: center;">
+                <h1>Illegal Parking Detection - Live Feed</h1>
+                <img src="/video_feed" style="border: 2px solid #555; width: 80%;">
+            </body>
+        </html>
+    """)
 
 def gen_frames():
     while True:
@@ -131,30 +154,37 @@ def gen_frames():
             time.sleep(0.1)
             continue
 
-        # Hailo Inference
         raw_frames = [f for n, f in active]
         results = detect(raw_frames)
 
         processed_frames = []
         for i, res in enumerate(results):
             cam_name, frame = active[i]
-            
-            # Draw Zone for Debugging
             cv2.polylines(frame, [tracker.zones[cam_name]], True, (0, 255, 0), 2)
             
-            # Format detections for tracker (using class index as temporary ID)
             formatted = []
-            for box in res.boxes:
-                formatted.append((box.cls[0], box.xyxy[0]))
-                # Draw boxes
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            if res.boxes.id is not None:  # Ensure there are tracking IDs
+                boxes = res.boxes.xyxy.cpu().numpy()
+                ids = res.boxes.id.cpu().numpy()
+                
+                for box, obj_id in zip(boxes, ids):
+                    formatted.append((int(obj_id), box))
+                    x1, y1, x2, y2 = map(int, box)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    cv2.putText(frame, f"ID: {int(obj_id)}", (x1, y1-10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
 
             tracker.process(cam_name, formatted, frame)
             processed_frames.append(cv2.resize(frame, (640, 480)))
 
         # Side-by-side display
-        combined = cv2.hconcat(processed_frames) if len(processed_frames) > 1 else processed_frames[0]
+        if len(processed_frames) > 1:
+            combined = cv2.hconcat(processed_frames)
+        elif len(processed_frames) == 1:
+            combined = processed_frames[0]
+        else:
+            continue
+
         _, buffer = cv2.imencode('.jpg', combined)
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
@@ -163,4 +193,5 @@ def video_feed():
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
+    # Threaded=True allows multiple browser tabs to watch at once
     app.run(host='0.0.0.0', port=5000, threaded=True)
