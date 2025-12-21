@@ -95,7 +95,9 @@ class ParkingMonitor:
             center = ((x1+x2)//2, (y1+y2)//2)
 
             if cid == 0:
+                # PERSON detected, draw cyan box
                 cv2.rectangle(frame,(x1,y1),(x2,y2),(255,255,0),1)
+                cv2.putText(frame, f"PERSON #{tid}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
                 continue
 
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
@@ -103,7 +105,7 @@ class ParkingMonitor:
                 dur = int(now - self.timers[(name,tid)])
                 color = (0,0,255) if dur >= config.VIOLATION_TIME_THRESHOLD else (0,255,255)
                 cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
-                cv2.putText(frame,f"{label} #{tid}: {dur}s",(x1,y1-8),0,0.6,color,2)
+                cv2.putText(frame,f"{label} #{tid}: {dur}s",(x1,y1-8),cv2.FONT_HERSHEY_SIMPLEX,0.6,color,2)
             else:
                 self.timers.pop((name,tid),None)
 
@@ -125,8 +127,10 @@ class Stream:
             if ret:
                 self.frame = f
             else:
+                logger.warning(f"Failed to read frame from {self.url}, retrying in 2 seconds...")
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
+            time.sleep(0.01)  # slight delay to reduce CPU usage
 
 
 c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
@@ -141,10 +145,12 @@ def gen():
             continue
 
         results = detect([f for _, f in frames])
+        logger.info(f"Detected {len(results)} frame results")
 
         imgs = []
         for i, res in enumerate(results):
             name, frame = frames[i]
+            logger.debug(f"Processing {name} with {len(res.xyxy)} detections")
             monitor.process(name, res, frame)
             imgs.append(cv2.resize(frame, (640,480)))
 
@@ -161,4 +167,5 @@ def index():
     return render_template_string("<h1>Parking Monitor</h1><img src='/video_feed' width='100%'>")
 
 if __name__ == "__main__":
+    logger.info("Starting Parking Monitor app on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, threaded=True)
