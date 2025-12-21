@@ -2,9 +2,10 @@ import cv2
 import threading
 import time
 import os
+import json
 import firebase_admin
 from firebase_admin import credentials, db
-from flask import Flask, Response, render_template
+from flask import Flask, Response, render_template, jsonify, request
 import datetime
 import argparse
 import sys
@@ -150,6 +151,33 @@ else:
     print("Using IP cameras (RTSP streams)")
 
 # =============================
+# SETTINGS FILE
+# =============================
+SETTINGS_FILE = "settings.json"
+
+def load_settings():
+    """Load settings from JSON file or return defaults"""
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, 'r') as f:
+            return json.load(f)
+    else:
+        from config import VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
+        return {
+            "VIOLATION_TIME_THRESHOLD": VIOLATION_TIME_THRESHOLD,
+            "REPEAT_CAPTURE_INTERVAL": REPEAT_CAPTURE_INTERVAL
+        }
+
+def save_settings(settings):
+    """Save settings to JSON file"""
+    with open(SETTINGS_FILE, 'w') as f:
+        json.dump(settings, f, indent=2)
+
+# Load settings at startup
+current_settings = load_settings()
+VIOLATION_TIME_THRESHOLD = current_settings["VIOLATION_TIME_THRESHOLD"]
+REPEAT_CAPTURE_INTERVAL = current_settings["REPEAT_CAPTURE_INTERVAL"]
+
+# =============================
 # FLASK APP
 # =============================
 app = Flask(__name__)
@@ -206,6 +234,24 @@ def index():
 @app.route('/video_feed')
 def video_feed():
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/settings.html')
+def settings_page():
+    return render_template('settings.html')
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    return jsonify(current_settings)
+
+@app.route('/api/settings', methods=['POST'])
+def update_settings():
+    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
+    data = request.get_json()
+    current_settings = data
+    save_settings(data)
+    VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
+    REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
+    return jsonify({"success": True})
 
 # =============================
 # MAIN
