@@ -21,7 +21,7 @@ logger = logging.getLogger("ParkingApp")
 
 os.makedirs(config.SAVE_DIR, exist_ok=True)
 
-# Polygons for violation detection
+# Polygons for violation detection (Adjust these coordinates for your camera views)
 ZONE_CAM1 = np.array([[100, 300], [500, 300], [600, 700], [50, 700]], np.int32)
 ZONE_CAM2 = np.array([[200, 200], [400, 200], [400, 600], [200, 600]], np.int32)
 
@@ -32,7 +32,7 @@ class FirebaseHandler:
                 cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
                 firebase_admin.initialize_app(cred, {'databaseURL': config.DATABASE_URL})
             self.ref = db.reference('violations_history')
-            logger.info("Firebase Connected")
+            logger.info("Firebase Connected Successfully")
         except Exception as e:
             logger.error(f"Firebase Init Error: {e}")
             self.ref = None
@@ -55,6 +55,7 @@ class FirebaseHandler:
                 "status": "Illegal Parking Detected",
                 "image_path": filename
             })
+            logger.info(f"Violation reported for {cam_name}")
         except Exception as e:
             logger.error(f"Firebase Upload Failed: {e}")
 
@@ -94,11 +95,13 @@ class VehicleTracker:
                 color = (0, 0, 255) if duration >= self.threshold else (0, 255, 255)
                 cv2.putText(frame, timer_text, (x1, y1 - 30), 0, 0.5, color, 2)
 
+                # Check if threshold reached
                 if obj_id not in self.violated_ids[cam_name] and duration >= self.threshold:
                     self.violated_ids[cam_name].add(obj_id)
                     self.last_capture[cam_name][obj_id] = now
                     new_violation = True
                 
+                # Check for repeat capture interval
                 elif obj_id in self.violated_ids[cam_name]:
                     if now - self.last_capture[cam_name].get(obj_id, 0) >= config.REPEAT_CAPTURE_INTERVAL:
                         self.last_capture[cam_name][obj_id] = now
@@ -126,12 +129,13 @@ class StreamManager:
             if ret:
                 self.frame = frame
             else:
-                self.frame = None # Explicitly set to None to trigger placeholder logic
+                self.frame = None
                 logger.warning(f"Lost connection to {self.name}. Reconnecting...")
                 self.cap.release()
                 time.sleep(5)
                 self.cap = cv2.VideoCapture(self.url)
 
+# Initialization of streams using config values
 cam1 = StreamManager(config.CAM1_URL, "Camera_1")
 cam2 = StreamManager(config.CAM2_URL, "Camera_2")
 
@@ -141,15 +145,17 @@ app = Flask(__name__)
 def index():
     return render_template_string("""
         <html>
+            <head><title>Parking Monitor</title></head>
             <body style="background: #000; color: white; text-align: center; font-family: sans-serif;">
                 <h1>Hailo-8L Dual Camera Parking Monitor</h1>
                 <div style="margin: 20px;">
-                    <img src="/video_feed" style="width: 90%; border: 5px solid #333; border-radius: 10px;">
+                    <img src="/video_feed" style="width: 90%; border: 5px solid #444; border-radius: 10px;">
                 </div>
                 <p>Status: Monitoring live RTSP streams</p>
+                <p style="color: #888;">Threshold: {{threshold}}s | Repeat: {{repeat}}s</p>
             </body>
         </html>
-    """)
+    """, threshold=config.VIOLATION_TIME_THRESHOLD, repeat=config.REPEAT_CAPTURE_INTERVAL)
 
 def gen_frames():
     while True:
@@ -158,7 +164,6 @@ def gen_frames():
         if cam2.frame is not None: available_streams.append(("Camera_2", cam2.frame.copy()))
         
         if not available_streams:
-            # Both cameras offline: Show warning
             black = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(black, "NO CAMERA CONNECTION", (120, 240), 0, 1, (0, 0, 255), 2)
             _, buffer = cv2.imencode('.jpg', black)
@@ -166,7 +171,7 @@ def gen_frames():
             time.sleep(1)
             continue
 
-        # AI Detection
+        # Perform Detection
         raw_frames = [f for n, f in available_streams]
         results = detect(raw_frames)
 
@@ -188,13 +193,12 @@ def gen_frames():
             tracker.process(cam_name, formatted_detections, frame)
             processed_map[cam_name] = cv2.resize(frame, (640, 480))
 
-        # Layout Logic: Maintain dual view even if one camera is gone
+        # Horizontal stacking of the two camera feeds
         final_layout = []
         for name in ["Camera_1", "Camera_2"]:
             if name in processed_map:
                 final_layout.append(processed_map[name])
             else:
-                # Placeholder for offline camera
                 offline_box = np.zeros((480, 640, 3), dtype=np.uint8)
                 cv2.putText(offline_box, f"{name} OFFLINE", (180, 240), 0, 0.8, (0, 0, 255), 2)
                 final_layout.append(offline_box)
