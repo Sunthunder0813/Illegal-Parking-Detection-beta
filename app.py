@@ -14,14 +14,15 @@ from app_detect import detect
 import config
 
 # =============================
-# INITIALIZATION & DEBUG LOGGING
+# INITIALIZATION & LOGGING
 # =============================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 
 os.makedirs(config.SAVE_DIR, exist_ok=True)
 
-# Zones (Ensure these match your stream resolution)
+# Polygons for violation detection
+# Note: You may need to update these coordinates to match your RTSP stream resolution
 ZONE_CAM1 = np.array([[100, 300], [500, 300], [600, 700], [50, 700]], np.int32)
 ZONE_CAM2 = np.array([[200, 200], [400, 200], [400, 600], [200, 600]], np.int32)
 
@@ -32,7 +33,7 @@ class FirebaseHandler:
                 cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
                 firebase_admin.initialize_app(cred, {'databaseURL': config.DATABASE_URL})
             self.ref = db.reference('violations_history')
-            logger.info("Firebase Connected Successfully")
+            logger.info("Firebase Connected")
         except Exception as e:
             logger.error(f"Firebase Init Error: {e}")
             self.ref = None
@@ -55,9 +56,8 @@ class FirebaseHandler:
                 "status": "Illegal Parking Detected",
                 "image_path": filename
             })
-            logger.info(f"Violation reported for {cam_name}")
         except Exception as e:
-            logger.error(f"Upload failed: {e}")
+            logger.error(f"Firebase Upload Failed: {e}")
 
 db_client = FirebaseHandler()
 
@@ -89,13 +89,11 @@ class VehicleTracker:
                 
                 duration = now - self.first_seen[cam_name][obj_id]
                 
-                # Check if threshold exceeded
                 if obj_id not in self.violated_ids[cam_name] and duration >= self.threshold:
                     self.violated_ids[cam_name].add(obj_id)
                     self.last_capture[cam_name][obj_id] = now
                     new_violation = True
                 
-                # Repeat capture logic
                 elif obj_id in self.violated_ids[cam_name]:
                     if now - self.last_capture[cam_name].get(obj_id, 0) >= config.REPEAT_CAPTURE_INTERVAL:
                         self.last_capture[cam_name][obj_id] = now
@@ -109,81 +107,84 @@ class VehicleTracker:
 tracker = VehicleTracker(config.VIOLATION_TIME_THRESHOLD)
 
 class StreamManager:
+    """Handles RTSP reconnection logic for IP Cameras"""
     def __init__(self, url, name):
-        self.name = name
         self.url = url
+        self.name = name
         self.cap = cv2.VideoCapture(url)
         self.frame = None
+        self.active = True
         threading.Thread(target=self._update, daemon=True).start()
 
     def _update(self):
-        while True:
+        while self.active:
             ret, frame = self.cap.read()
             if ret:
                 self.frame = frame
             else:
-                logger.warning(f"Reconnecting to {self.name}...")
+                logger.warning(f"Lost connection to {self.name}. Reconnecting...")
                 self.cap.release()
-                time.sleep(2)
+                time.sleep(5)
                 self.cap = cv2.VideoCapture(self.url)
 
+# Initialize streams with config URLs
 cam1 = StreamManager(config.CAM1_URL, "Camera_1")
 cam2 = StreamManager(config.CAM2_URL, "Camera_2")
+
 app = Flask(__name__)
 
-# --- ADDED INDEX ROUTE TO FIX 404 ---
 @app.route('/')
 def index():
     return render_template_string("""
         <html>
-            <head><title>Hailo Parking Monitor</title></head>
-            <body style="background: #111; color: white; text-align: center;">
-                <h1>Illegal Parking Detection - Live Feed</h1>
-                <img src="/video_feed" style="border: 2px solid #555; width: 80%;">
+            <body style="background: #000; color: white; text-align: center; font-family: sans-serif;">
+                <h1>Hailo-8L Dual Camera Parking Monitor</h1>
+                <div style="margin: 20px;">
+                    <img src="/video_feed" style="width: 90%; border: 5px solid #333; border-radius: 10px;">
+                </div>
+                <p>Status: Monitoring live RTSP streams</p>
             </body>
         </html>
     """)
 
 def gen_frames():
     while True:
-        active = []
-        if cam1.frame is not None: active.append(("Camera_1", cam1.frame.copy()))
-        if cam2.frame is not None: active.append(("Camera_2", cam2.frame.copy()))
+        streams = []
+        if cam1.frame is not None: streams.append(("Camera_1", cam1.frame.copy()))
+        if cam2.frame is not None: streams.append(("Camera_2", cam2.frame.copy()))
         
-        if not active:
+        if not streams:
             time.sleep(0.1)
             continue
 
-        raw_frames = [f for n, f in active]
-        results = detect(raw_frames)
+        # Run AI Inference (Hailo-8L)
+        frames_to_ai = [f for n, f in streams]
+        results = detect(frames_to_ai)
 
-        processed_frames = []
+        processed = []
         for i, res in enumerate(results):
-            cam_name, frame = active[i]
+            cam_name, frame = streams[i]
             cv2.polylines(frame, [tracker.zones[cam_name]], True, (0, 255, 0), 2)
             
-            formatted = []
-            if res.boxes.id is not None:  # Ensure there are tracking IDs
+            formatted_detections = []
+            if res.boxes.id is not None:
                 boxes = res.boxes.xyxy.cpu().numpy()
                 ids = res.boxes.id.cpu().numpy()
                 
                 for box, obj_id in zip(boxes, ids):
-                    formatted.append((int(obj_id), box))
+                    formatted_detections.append((int(obj_id), box))
                     x1, y1, x2, y2 = map(int, box)
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                    cv2.putText(frame, f"ID: {int(obj_id)}", (x1, y1-10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,0,0), 2)
+                    cv2.putText(frame, f"ID:{int(obj_id)}", (x1, y1-10), 0, 0.5, (255,0,0), 2)
 
-            tracker.process(cam_name, formatted, frame)
-            processed_frames.append(cv2.resize(frame, (640, 480)))
+            tracker.process(cam_name, formatted_detections, frame)
+            processed.append(cv2.resize(frame, (640, 480)))
 
-        # Side-by-side display
-        if len(processed_frames) > 1:
-            combined = cv2.hconcat(processed_frames)
-        elif len(processed_frames) == 1:
-            combined = processed_frames[0]
+        # Layout Logic
+        if len(processed) == 2:
+            combined = cv2.hconcat(processed)
         else:
-            continue
+            combined = processed[0]
 
         _, buffer = cv2.imencode('.jpg', combined)
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
@@ -193,5 +194,4 @@ def video_feed():
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    # Threaded=True allows multiple browser tabs to watch at once
     app.run(host='0.0.0.0', port=5000, threaded=True)
