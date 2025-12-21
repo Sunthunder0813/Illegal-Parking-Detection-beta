@@ -22,7 +22,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 # DEFINE YOUR ILLEGAL ZONES (Normalized coordinates 0.0 to 1.0 or pixel coordinates)
 # Format: np.array([[x1, y1], [x2, y2], ...], np.int32)
 # For this example, I'm using placeholder coordinates. Update these to match your camera view.
-ZONE_CAM1 = np.array([[100, 300], [500, 300], [600, 700], [50, 700]], np.int32)
+ZONE_CAM1 = np.array([[87, 442], [44, 213], [467, 241], [654, 446]], np.int32)
 ZONE_CAM2 = np.array([[200, 200], [400, 200], [400, 600], [200, 600]], np.int32)
 
 class FirebaseHandler:
