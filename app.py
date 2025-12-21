@@ -126,25 +126,28 @@ def gen_frames():
         if not streams:
             time.sleep(0.1); continue
 
+        # Detect across all active streams
         results = detect([f for n, f in streams])
 
         processed = {}
         for i, res in enumerate(results):
-            cam_name, frame = streams[i]
-            h, w = frame.shape[:2]
-            cv2.polylines(frame, [tracker.zones[cam_name]], True, (0, 255, 0), 2)
-            
-            formatted = []
-            # Updated safety check for boxes and IDs
-            if res.boxes is not None and res.boxes.id is not None:
-                for box, obj_id in zip(res.boxes.xyxy, res.boxes.id):
-                    x1, y1, x2, y2 = int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)
-                    formatted.append((int(obj_id), [x1, y1, x2, y2]))
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                    cv2.putText(frame, f"ID:{int(obj_id)}", (x1, y1-10), 0, 0.5, (255,0,0), 2)
+            try:
+                cam_name, frame = streams[i]
+                h, w = frame.shape[:2]
+                cv2.polylines(frame, [tracker.zones[cam_name]], True, (0, 255, 0), 2)
+                
+                formatted = []
+                if res.boxes is not None and res.boxes.id is not None:
+                    for box, obj_id in zip(res.boxes.xyxy, res.boxes.id):
+                        x1, y1, x2, y2 = int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)
+                        formatted.append((int(obj_id), [x1, y1, x2, y2]))
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                        cv2.putText(frame, f"ID:{int(obj_id)}", (x1, y1-10), 0, 0.5, (255,0,0), 2)
 
-            tracker.process(cam_name, formatted, frame)
-            processed[cam_name] = cv2.resize(frame, (640, 480))
+                tracker.process(cam_name, formatted, frame)
+                processed[cam_name] = cv2.resize(frame, (640, 480))
+            except Exception as e:
+                logger.error(f"Error processing stream {i}: {e}")
 
         layout = [processed.get(n, np.zeros((480, 640, 3), np.uint8)) for n in ["Camera_1", "Camera_2"]]
         combined = cv2.hconcat(layout)
@@ -157,7 +160,14 @@ def video_feed():
 
 @app.route('/')
 def index():
-    return render_template_string("<h1>Parking Monitor</h1><img src='/video_feed' width='90%'>")
+    return render_template_string("""
+    <html>
+        <body style="background:#000; color:white; text-align:center;">
+            <h1>Dual Camera Parking Monitor</h1>
+            <img src='/video_feed' width='90%' style="border:2px solid #555;">
+        </body>
+    </html>
+    """)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, threaded=True)
