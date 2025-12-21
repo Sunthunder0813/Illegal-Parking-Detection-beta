@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
-import logging
 import threading
+import logging
 
 from hailo_platform import (
     HEF,
@@ -20,20 +20,18 @@ logger = logging.getLogger("ParkingApp")
 
 class DetectionResult:
     def __init__(self, xyxy, conf, cls):
-        self.xyxy = xyxy    # (N,4) [x1,y1,x2,y2]
-        self.conf = conf   # (N,)
-        self.cls = cls     # (N,)
+        self.xyxy = xyxy  # pixel coords in 640x640 space
+        self.conf = conf
+        self.cls = cls
 
 
 class HailoDetector:
     def __init__(self, hef_path):
         self.lock = threading.Lock()
 
-        # Load HEF
         self.hef = HEF(hef_path)
         self.device = VDevice()
 
-        # Configure device (PCIe)
         params = ConfigureParams.create_from_hef(
             self.hef, interface=HailoStreamInterface.PCIe
         )
@@ -42,55 +40,42 @@ class HailoDetector:
         self.input_vstreams_params = InputVStreamParams.make(self.network_group)
         self.output_vstreams_params = OutputVStreamParams.make(self.network_group)
 
-        # Input info
         self.input_info = self.hef.get_input_vstream_infos()[0]
-        self.height, self.width, _ = self.input_info.shape
+        self.h, self.w, _ = self.input_info.shape  # 640x640
 
-        # COCO classes
-        # 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck
+        # COCO: person + vehicles
         self.monitored_classes = {0, 2, 3, 5, 7}
 
-        logger.info(
-            f"Hailo YOLOv8 initialized | input={self.width}x{self.height} UINT8 RGB"
-        )
+        logger.info("Hailo YOLOv8 detector initialized")
 
-    # --------------------------------------------------
-    # Preprocess (MUST match HEF exactly)
     # --------------------------------------------------
     def preprocess(self, frame):
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = cv2.resize(frame, (self.width, self.height))
+        frame = cv2.resize(frame, (self.w, self.h))
         frame = np.expand_dims(frame, axis=0)
         return frame.astype(np.uint8)
 
     # --------------------------------------------------
-    # Postprocess (Hailo NMS output ONLY)
-    # --------------------------------------------------
     def postprocess(self, raw_out):
         boxes, scores, classes = [], [], []
 
-        # Find Hailo NMS output tensor
-        nms_key = next(
-            (k for k in raw_out.keys() if "nms" in k.lower()),
-            None
-        )
-
+        nms_key = next((k for k in raw_out if "nms" in k.lower()), None)
         if nms_key is None:
-            logger.error("NMS output tensor not found!")
+            logger.error("NMS output not found")
             return DetectionResult(
-                np.empty((0, 4), dtype=np.float32),
-                np.empty((0,), dtype=np.float32),
-                np.empty((0,), dtype=np.int32),
+                np.empty((0, 4)), np.array([]), np.array([])
             )
 
-        detections = raw_out[nms_key].reshape(-1, 6)
+        detections = raw_out[nms_key]  # LIST (important)
 
         for det in detections:
+            if len(det) < 6:
+                continue
+
             x1, y1, x2, y2, score, cls_id = det
             score = float(score)
             cls_id = int(cls_id)
 
-            # HEF already applies score >= 0.2, this is just safety
             if score < 0.2:
                 continue
 
@@ -105,8 +90,6 @@ class HailoDetector:
             np.asarray(classes, dtype=np.int32),
         )
 
-    # --------------------------------------------------
-    # Run inference
     # --------------------------------------------------
     def run_detection(self, frames):
         results = []
@@ -127,9 +110,6 @@ class HailoDetector:
         return results
 
 
-# --------------------------------------------------
-# Global detector instance
-# --------------------------------------------------
 _detector = None
 
 
