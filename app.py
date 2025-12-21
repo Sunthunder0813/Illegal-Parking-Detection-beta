@@ -10,18 +10,21 @@ from flask import Flask, Response, render_template_string
 from app_detect import detect
 import config
 
-# Initialize Firebase
+# --- Initialization ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ParkingApp")
+
 try:
     if not firebase_admin._apps:
         cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
         firebase_admin.initialize_app(cred, {'databaseURL': config.DATABASE_URL})
-    fb_db = db.reference('violations')
+    ref = db.reference('violations')
 except Exception as e:
-    print(f"Firebase Init Error: {e}")
-    fb_db = None
+    logger.error(f"Firebase Init Error: {e}")
+    ref = None
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("ParkingApp")
+if not os.path.exists(config.SAVE_DIR):
+    os.makedirs(config.SAVE_DIR)
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 
@@ -43,7 +46,6 @@ class ByteTrackLite:
     def update(self, boxes, scores, clss):
         self.frame_count += 1
         new_tracks = {}
-        
         for box, score, cid in zip(boxes, scores, clss):
             best_id, best_iou = None, 0.3
             for tid, t in self.tracked_objects.items():
@@ -54,7 +56,7 @@ class ByteTrackLite:
             if best_id is not None:
                 new_tracks[best_id] = {'box': box, 'cls': cid, 'last_seen': self.frame_count}
                 self.tracked_objects.pop(best_id, None)
-            elif score >= 0.3:
+            elif score >= 0.4:
                 new_tracks[self.next_id] = {'box': box, 'cls': cid, 'last_seen': self.frame_count}
                 self.next_id += 1
 
@@ -69,7 +71,7 @@ class ParkingMonitor:
     def __init__(self):
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
-        self.last_upload = {}
+        self.last_upload_time = {}
         self.zones = {
             "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
             "Camera_2": np.array([[200, 200], [1000, 200], [1000, 600], [200, 600]])
@@ -77,8 +79,7 @@ class ParkingMonitor:
 
     def process(self, name, res, frame):
         fh, fw = frame.shape[:2]
-        cv2.polylines(frame, [self.zones[name]], True, (0,255,0), 2)
-
+        cv2.polylines(frame, [self.zones[name]], True, (0, 255, 0), 2)
         pixel_boxes = [[b[0]*fw, b[1]*fh, b[2]*fw, b[3]*fh] for b in res.xyxy]
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
         now = time.time()
@@ -89,20 +90,34 @@ class ParkingMonitor:
             center = ((x1+x2)//2, (y1+y2)//2)
 
             if d['cls'] == 0:
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
+                cv2.rectangle(frame, (x1,y1), (x2,y2), (255,255,0), 1)
                 continue
 
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
                 self.timers.setdefault((name, tid), now)
                 dur = int(now - self.timers[(name, tid)])
                 
-                color = (0,0,255) if dur >= config.VIOLATION_TIME_THRESHOLD else (0,255,255)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"{label} #{tid}: {dur}s", (x1, y1-8), 0, 0.6, color, 2)
-                
-                # Upload logic could go here
+                is_v = dur >= config.VIOLATION_TIME_THRESHOLD
+                color = (0,0,255) if is_v else (0,255,255)
+                cv2.rectangle(frame, (x1,y1), (x2,y2), color, 2)
+                cv2.putText(frame, f"{label} #{tid}: {dur}s", (x1,y1-8), 0, 0.6, color, 2)
+
+                if is_v:
+                    last_up = self.last_upload_time.get((name, tid), 0)
+                    if now - last_up > config.REPEAT_CAPTURE_INTERVAL:
+                        self.log_violation(name, tid, label, frame)
+                        self.last_upload_time[(name, tid)] = now
             else:
                 self.timers.pop((name, tid), None)
+
+    def log_violation(self, cam, tid, label, frame):
+        ts = int(time.time())
+        path = os.path.join(config.SAVE_DIR, f"{cam}_{tid}_{ts}.jpg")
+        cv2.imwrite(path, frame)
+        if ref:
+            try:
+                ref.push({'camera': cam, 'id': tid, 'type': label, 'time': ts, 'path': path})
+            except Exception as e: logger.error(f"FB Error: {e}")
 
 class Stream:
     def __init__(self, url):
@@ -125,30 +140,27 @@ c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
 def gen():
     while True:
-        active_frames = []
-        if c1.frame is not None: active_frames.append(("Camera_1", c1.frame.copy()))
-        if c2.frame is not None: active_frames.append(("Camera_2", c2.frame.copy()))
+        active = []
+        if c1.frame is not None: active.append(("Camera_1", c1.frame.copy()))
+        if c2.frame is not None: active.append(("Camera_2", c2.frame.copy()))
         
-        if not active_frames:
-            time.sleep(0.05)
+        if not active:
+            time.sleep(0.01)
             continue
 
-        # Batch Inference
         try:
-            results = detect([f for _, f in active_frames])
-            
-            out_imgs = []
+            results = detect([f for _, f in active])
+            out = []
             for i, res in enumerate(results):
-                name, frame = active_frames[i]
+                name, frame = active[i]
                 monitor.process(name, res, frame)
-                out_imgs.append(cv2.resize(frame, (640, 480)))
+                out.append(cv2.resize(frame, (640, 480)))
 
-            combined = cv2.hconcat(out_imgs) if len(out_imgs) == 2 else out_imgs[0]
+            combined = cv2.hconcat(out) if len(out) == 2 else out[0]
             _, buf = cv2.imencode('.jpg', combined)
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         except Exception as e:
             logger.error(f"Gen Error: {e}")
-            continue
 
 @app.route('/')
 def index():
