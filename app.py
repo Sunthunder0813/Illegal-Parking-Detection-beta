@@ -1,25 +1,21 @@
 import cv2
 import threading
 import time
-import os
-import datetime
 import numpy as np
 import logging
 from flask import Flask, Response, render_template_string
-import firebase_admin
-from firebase_admin import credentials, db
-
 from app_detect import detect
 import config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 
+# COCO Class IDs
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 
-# --------------------------------------------------
-# BYTE TRACK LITE
-# --------------------------------------------------
+# ---------------------------
+# ByteTrack Lite
+# ---------------------------
 class ByteTrackLite:
     def __init__(self):
         self.tracked_objects = {}
@@ -40,7 +36,6 @@ class ByteTrackLite:
     def update(self, boxes, scores, clss):
         self.frame_count += 1
         new_tracks = {}
-
         for box, score, cid in zip(boxes, scores, clss):
             best_id, best_iou = None, 0.3
             for tid, t in self.tracked_objects.items():
@@ -62,8 +57,9 @@ class ByteTrackLite:
         self.tracked_objects = new_tracks
         return {k: v for k, v in new_tracks.items() if v['last_seen'] == self.frame_count}
 
-
-# --------------------------------------------------
+# ---------------------------
+# Parking Monitor
+# ---------------------------
 class ParkingMonitor:
     def __init__(self):
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
@@ -75,14 +71,10 @@ class ParkingMonitor:
 
     def process(self, name, res, frame):
         fh, fw = frame.shape[:2]
-        sx, sy = fw / 640.0, fh / 640.0
-
         cv2.polylines(frame, [self.zones[name]], True, (0,255,0), 2)
 
-        # 🔥 FIX: scale from 640x640 → frame size
         pixel_boxes = [
-            [b[0]*sx, b[1]*sy, b[2]*sx, b[3]*sy]
-            for b in res.xyxy
+            [b[0]*fw, b[1]*fh, b[2]*fw, b[3]*fh] for b in res.xyxy
         ]
 
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
@@ -95,9 +87,8 @@ class ParkingMonitor:
             center = ((x1+x2)//2, (y1+y2)//2)
 
             if cid == 0:
-                # PERSON detected, draw cyan box
                 cv2.rectangle(frame,(x1,y1),(x2,y2),(255,255,0),1)
-                cv2.putText(frame, f"PERSON #{tid}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
+                cv2.putText(frame, f"PERSON #{tid}", (x1,y1-8),0,0.5,(255,255,0),1)
                 continue
 
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
@@ -105,15 +96,13 @@ class ParkingMonitor:
                 dur = int(now - self.timers[(name,tid)])
                 color = (0,0,255) if dur >= config.VIOLATION_TIME_THRESHOLD else (0,255,255)
                 cv2.rectangle(frame,(x1,y1),(x2,y2),color,2)
-                cv2.putText(frame,f"{label} #{tid}: {dur}s",(x1,y1-8),cv2.FONT_HERSHEY_SIMPLEX,0.6,color,2)
+                cv2.putText(frame,f"{label} #{tid}: {dur}s",(x1,y1-8),0,0.6,color,2)
             else:
                 self.timers.pop((name,tid),None)
 
-
-monitor = ParkingMonitor()
-app = Flask(__name__)
-
-# --------------------------------------------------
+# ---------------------------
+# Video Stream Handler
+# ---------------------------
 class Stream:
     def __init__(self, url):
         self.url = url
@@ -127,12 +116,14 @@ class Stream:
             if ret:
                 self.frame = f
             else:
-                logger.warning(f"Failed to read frame from {self.url}, retrying in 2 seconds...")
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
-            time.sleep(0.01)  # slight delay to reduce CPU usage
 
-
+# ---------------------------
+# Flask App
+# ---------------------------
+app = Flask(__name__)
+monitor = ParkingMonitor()
 c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
 def gen():
@@ -145,27 +136,23 @@ def gen():
             continue
 
         results = detect([f for _, f in frames])
-        logger.info(f"Detected {len(results)} frame results")
-
-        imgs = []
+        out_imgs = []
         for i, res in enumerate(results):
             name, frame = frames[i]
-            logger.debug(f"Processing {name} with {len(res.xyxy)} detections")
             monitor.process(name, res, frame)
-            imgs.append(cv2.resize(frame, (640,480)))
+            out_imgs.append(cv2.resize(frame, (640,480)))
 
-        combined = cv2.hconcat(imgs) if len(imgs)==2 else imgs[0]
-        _, buf = cv2.imencode(".jpg", combined)
-        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n")
+        combined = cv2.hconcat(out_imgs) if len(out_imgs)==2 else out_imgs[0]
+        _, buf = cv2.imencode('.jpg', combined)
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
 
-@app.route("/video_feed")
-def video_feed():
-    return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
-
-@app.route("/")
+@app.route('/')
 def index():
     return render_template_string("<h1>Parking Monitor</h1><img src='/video_feed' width='100%'>")
 
+@app.route('/video_feed')
+def video_feed():
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
 if __name__ == "__main__":
-    logger.info("Starting Parking Monitor app on http://0.0.0.0:5000")
-    app.run(host="0.0.0.0", port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000, threaded=True)
