@@ -43,10 +43,10 @@ class HailoDetector:
         self.input_info = self.hef.get_input_vstream_infos()[0]
         self.h, self.w, _ = self.input_info.shape  # 640x640
 
-        # person + vehicles
+        # COCO: person + vehicles
         self.monitored_classes = {0, 2, 3, 5, 7}
 
-        logger.info("Hailo YOLOv8 detector initialized (NMS enabled)")
+        logger.info("Hailo YOLOv8 detector initialized (NMS ON)")
 
     # --------------------------------------------------
     def preprocess(self, frame):
@@ -68,19 +68,19 @@ class HailoDetector:
                 np.empty((0,), dtype=np.int32),
             )
 
-        detections = raw_out[nms_key]  # LIST
+        detections = raw_out[nms_key]
 
         for det in detections:
-            if len(det) < 6:
+            # 🔥 FLATTEN EVERYTHING SAFELY
+            det = np.asarray(det).flatten()
+
+            if det.size < 6:
                 continue
 
-            # 🔥 SAFE UNPACK (ignore extra fields)
-            x1 = float(det[0])
-            y1 = float(det[1])
-            x2 = float(det[2])
-            y2 = float(det[3])
-            score = float(det[4])
-            cls_id = int(det[5])
+            x1, y1, x2, y2, score, cls_id = det[:6]
+
+            score = float(score)
+            cls_id = int(cls_id)
 
             if score < 0.2:
                 continue
