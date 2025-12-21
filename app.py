@@ -12,10 +12,12 @@ from firebase_admin import credentials, db
 from app_detect import detect
 import config
 
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 os.makedirs(config.SAVE_DIR, exist_ok=True)
 
+# Zones for violation detection (Normalized to typical 1280x720 or 1920x1080)
 ZONE_CAM1 = np.array([[100, 300], [500, 300], [600, 700], [50, 700]], np.int32)
 ZONE_CAM2 = np.array([[200, 200], [400, 200], [400, 600], [200, 600]], np.int32)
 
@@ -40,12 +42,17 @@ class FirebaseHandler:
             fname = f"{cam_name}_{ts}.jpg"
             fpath = os.path.join(config.SAVE_DIR, fname)
             cv2.imwrite(fpath, frame)
+            
             self.ref.push({
                 "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "camera": cam_name, "vehicle_count": count,
-                "status": "Illegal Parking Detected", "image_path": fname
+                "camera": cam_name,
+                "vehicle_count": count,
+                "status": "Illegal Parking Detected",
+                "image_path": fname
             })
-        except Exception as e: logger.error(f"Firebase Error: {e}")
+            logger.info(f"DB Uploaded: {fname}")
+        except Exception as e:
+            logger.error(f"Firebase Upload Failed: {e}")
 
 db_client = FirebaseHandler()
 
@@ -77,8 +84,10 @@ class VehicleTracker:
                 
                 duration = now - self.first_seen[cam_name][obj_id]
                 x1, y1, x2, y2 = map(int, box)
+                
+                # Visual logic
                 color = (0, 0, 255) if duration >= self.threshold else (0, 255, 255)
-                cv2.putText(frame, f"Parked: {int(duration)}s", (x1, y1 - 30), 0, 0.5, color, 2)
+                cv2.putText(frame, f"Parked: {int(duration)}s", (x1, y1 - 30), 0, 0.6, color, 2)
 
                 if obj_id not in self.violated_ids[cam_name] and duration >= self.threshold:
                     self.violated_ids[cam_name].add(obj_id)
@@ -119,39 +128,40 @@ app = Flask(__name__)
 
 def gen_frames():
     while True:
-        streams = []
-        if cam1.frame is not None: streams.append(("Camera_1", cam1.frame.copy()))
-        if cam2.frame is not None: streams.append(("Camera_2", cam2.frame.copy()))
+        available_streams = []
+        if cam1.frame is not None: available_streams.append(("Camera_1", cam1.frame.copy()))
+        if cam2.frame is not None: available_streams.append(("Camera_2", cam2.frame.copy()))
         
-        if not streams:
+        if not available_streams:
             time.sleep(0.1); continue
 
-        # Detect across all active streams
-        results = detect([f for n, f in streams])
+        # Run Inference
+        results = detect([f for n, f in available_streams])
 
-        processed = {}
+        processed_map = {}
         for i, res in enumerate(results):
             try:
-                cam_name, frame = streams[i]
+                cam_name, frame = available_streams[i]
                 h, w = frame.shape[:2]
                 cv2.polylines(frame, [tracker.zones[cam_name]], True, (0, 255, 0), 2)
                 
-                formatted = []
+                formatted_dets = []
                 if res.boxes is not None and res.boxes.id is not None:
                     for box, obj_id in zip(res.boxes.xyxy, res.boxes.id):
+                        # Scale normalized coords (0-1) to frame pixels
                         x1, y1, x2, y2 = int(box[0]*w), int(box[1]*h), int(box[2]*w), int(box[3]*h)
-                        formatted.append((int(obj_id), [x1, y1, x2, y2]))
+                        formatted_dets.append((int(obj_id), [x1, y1, x2, y2]))
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                        cv2.putText(frame, f"ID:{int(obj_id)}", (x1, y1-10), 0, 0.5, (255,0,0), 2)
-
-                tracker.process(cam_name, formatted, frame)
-                processed[cam_name] = cv2.resize(frame, (640, 480))
+                
+                tracker.process(cam_name, formatted_dets, frame)
+                processed_map[cam_name] = cv2.resize(frame, (640, 480))
             except Exception as e:
-                logger.error(f"Error processing stream {i}: {e}")
+                logger.error(f"Processing Error on {cam_name}: {e}")
 
-        layout = [processed.get(n, np.zeros((480, 640, 3), np.uint8)) for n in ["Camera_1", "Camera_2"]]
+        # Construct Web UI
+        layout = [processed_map.get(n, np.zeros((480, 640, 3), np.uint8)) for n in ["Camera_1", "Camera_2"]]
         combined = cv2.hconcat(layout)
-        _, buffer = cv2.imencode('.jpg', combined, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        _, buffer = cv2.imencode('.jpg', combined, [cv2.IMWRITE_JPEG_QUALITY, 80])
         yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
 @app.route('/video_feed')
@@ -162,9 +172,11 @@ def video_feed():
 def index():
     return render_template_string("""
     <html>
-        <body style="background:#000; color:white; text-align:center;">
-            <h1>Dual Camera Parking Monitor</h1>
-            <img src='/video_feed' width='90%' style="border:2px solid #555;">
+        <head><title>Hailo-8L Monitor</title></head>
+        <body style="background:#111; color:white; font-family:sans-serif; text-align:center;">
+            <h2>Illegal Parking Detection Beta</h2>
+            <img src="/video_feed" style="width:90%; border:4px solid #333; border-radius:10px;">
+            <p>Tracking active on Camera 1 and Camera 2</p>
         </body>
     </html>
     """)
