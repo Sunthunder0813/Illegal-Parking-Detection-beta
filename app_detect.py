@@ -41,20 +41,26 @@ class HailoDetector:
         nms_node = [name for name in raw_out.keys() if 'nms' in name.lower()]
         
         if nms_node:
-            detections = raw_out[nms_node[0]][0] 
-            # SAFE CHECK: Ensure detections is not empty before indexing
-            if detections.ndim > 1 and detections.shape[0] > 0:
+            # FIX: Ensure we handle list vs array correctly
+            detections = raw_out[nms_node[0]]
+            if isinstance(detections, list):
+                detections = np.array(detections)
+            
+            # Peel off the batch dimension [Batch, N, 6] -> [N, 6]
+            if detections.ndim == 3:
+                detections = detections[0]
+
+            if detections.size > 0 and detections.ndim == 2:
                 for det in detections:
                     # Hailo YOLO NMS: [ymin, xmin, ymax, xmax, score, class_id]
-                    # Check if the row actually has values (score > 0)
-                    score = det[4]
-                    if score > 0.4: 
-                        all_boxes.append([det[1], det[0], det[3], det[2]])
-                        all_confs.append(score)
-                        all_clss.append(det[5])
+                    if len(det) >= 5:
+                        score = det[4]
+                        if score > 0.4: 
+                            all_boxes.append([det[1], det[0], det[3], det[2]])
+                            all_confs.append(score)
+                            all_clss.append(det[5])
 
         boxes_np = np.array(all_boxes) if all_boxes else np.empty((0, 4))
-        # Important: Return None for IDs if no detections, to match app.py logic
         ids_np = np.arange(len(all_boxes)) if len(all_boxes) > 0 else None
         
         return HailoResult(BoxResult(boxes_np, ids_np, np.array(all_confs), np.array(all_clss)))
@@ -80,7 +86,9 @@ def get_model():
 def detect(frames):
     detector = get_model()
     if detector is None: return []
-    try: return detector.run_detection(frames)
+    try: 
+        return detector.run_detection(frames)
     except Exception as e:
         logger.error(f"Detection error: {e}")
+        # Return empty results for each frame to prevent app.py from crashing
         return [HailoResult(BoxResult(np.empty((0,4)), None, np.array([]), np.array([])))] * len(frames)
