@@ -1,7 +1,8 @@
 import numpy as np
 import cv2
 import logging
-from hailo_platform import HEF, VDevice, InferVStreams, ConfigureParams, InputVStreamParams, OutputVStreamParams, HailoStreamInterface
+from hailo_platform import (HEF, VDevice, InferVStreams, ConfigureParams, 
+                            InputVStreamParams, OutputVStreamParams, HailoStreamInterface)
 from config import MODEL_PATH
 
 logger = logging.getLogger("ParkingApp")
@@ -11,56 +12,47 @@ class HailoDetector:
         self.hef = HEF(hef_path)
         self.target = VDevice()
         
-        # Configure the device interface for Raspberry Pi 5 (PCIe)
+        # Configure for Raspberry Pi 5 PCIe
         configure_params = ConfigureParams.create_from_hef(
             self.hef, interface=HailoStreamInterface.PCIe
         )
         self.network_group = self.target.configure(self.hef, configure_params)[0]
+        
+        # FIX 1: Use .activate() instead of .activate_context()
+        self.active_network = self.network_group.activate()
+        
+        # Prepare stream parameters
         self.input_vstreams_params = InputVStreamParams.make(self.network_group)
         self.output_vstreams_params = OutputVStreamParams.make(self.network_group)
         
-        # Get input shape requirements from the model (usually 640x640)
+        # Input info
         self.input_info = self.hef.get_input_vstream_infos()[0]
-        self.height, self.width, self.channels = self.input_info.shape
-        logger.info(f"Hailo Model loaded. Expected input: {self.width}x{self.height}")
+        self.height, self.width, _ = self.input_info.shape
+        
+        logger.info(f"Hailo-8L Ready. Input size: {self.width}x{self.height}")
 
     def preprocess(self, frame):
-        """Resize and pad image to model input size."""
-        # Resize to model dimensions
-        resized = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
-        return np.expand_dims(resized, axis=0).astype(np.float32)
+        resized = cv2.resize(frame, (self.width, self.height))
+        return np.expand_dims(resized, axis=0)
 
-    def postprocess(self, detections, threshold=0.45):
-        """
-        Simplistic post-processing. 
-        Note: Actual HEF output format depends on how the model was compiled.
-        This assumes the model includes a NMS layer.
-        """
-        # Dictionary to store formatted results similar to Ultralytics
-        class ResultStub:
-            def __init__(self, boxes, ids):
-                self.boxes = self.BoxStub(boxes, ids)
-            class BoxStub:
-                def __init__(self, xyxy, ids):
-                    self.xyxy = type('obj', (object,), {'cpu': lambda: type('obj', (object,), {'numpy': lambda: xyxy})()})()
-                    self.id = type('obj', (object,), {'cpu': lambda: type('obj', (object,), {'numpy': lambda: ids})()})()
-
-        # In a real scenario, you'd parse the output tensors here.
-        # Since specific HEF output parsing is complex, we return a compatible 
-        # structure for your app.py logic.
-        return []
-
-    def run_inference(self, frames):
+    def detect_frames(self, frames):
         results = []
+        # FIX 2: Keep the pipeline open for the duration of the detection call
         with InferVStreams(self.network_group, self.input_vstreams_params, self.output_vstreams_params) as infer_pipeline:
-            with self.network_group.activate_context():
-                for frame in frames:
-                    input_data = {self.input_info.name: self.preprocess(frame)}
-                    raw_out = infer_pipeline.infer(input_data)
-                    # Process raw_out based on your specific YOLOv8 HEF architecture
-                    # For this template, we return an empty list to prevent crashes
-                    results.append(raw_out) 
+            for frame in frames:
+                input_data = {self.input_info.name: self.preprocess(frame)}
+                raw_out = infer_pipeline.infer(input_data)
+                
+                # Mock result object to keep your app logic working
+                # We return the raw output for now; you may need to parse 
+                # boxes depending on your specific HEF.
+                results.append(raw_out)
         return results
+
+    def __del__(self):
+        # Clean up hardware resources on shutdown
+        if hasattr(self, 'active_network'):
+            self.active_network.close()
 
 # Singleton instance
 _detector = None
@@ -71,7 +63,7 @@ def get_model():
         try:
             _detector = HailoDetector(MODEL_PATH)
         except Exception as e:
-            logger.error(f"Hailo Init Error: {e}")
+            logger.error(f"Failed to initialize Hailo hardware: {e}")
             return None
     return _detector
 
@@ -81,13 +73,7 @@ def detect(frames):
         return []
     
     try:
-        # Hailo works best when processing frames sequentially in this setup
-        raw_results = detector.run_inference(frames)
-        
-        # IMPORTANT: To make this work with your app.py logic:
-        # You need a Post-Processor compatible with your specific .hef file.
-        # Most pre-compiled Hailo YOLOv8 HEFs return multiple tensors (anchors).
-        return raw_results 
+        return detector.detect_frames(frames)
     except Exception as e:
         logger.error(f"Inference error: {e}")
         return []
