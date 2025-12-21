@@ -65,7 +65,7 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.zones = {
-            "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]),
+            "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
             "Camera_2": np.array([[200,200],[1000,200],[1000,600],[200,600]])
         }
 
