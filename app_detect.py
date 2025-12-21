@@ -20,7 +20,7 @@ logger = logging.getLogger("ParkingApp")
 
 class DetectionResult:
     def __init__(self, xyxy, conf, cls):
-        self.xyxy = xyxy  # pixel coords in 640x640 space
+        self.xyxy = xyxy  # pixel coords in 640x640
         self.conf = conf
         self.cls = cls
 
@@ -43,10 +43,10 @@ class HailoDetector:
         self.input_info = self.hef.get_input_vstream_infos()[0]
         self.h, self.w, _ = self.input_info.shape  # 640x640
 
-        # COCO: person + vehicles
+        # person + vehicles
         self.monitored_classes = {0, 2, 3, 5, 7}
 
-        logger.info("Hailo YOLOv8 detector initialized")
+        logger.info("Hailo YOLOv8 detector initialized (NMS enabled)")
 
     # --------------------------------------------------
     def preprocess(self, frame):
@@ -61,20 +61,26 @@ class HailoDetector:
 
         nms_key = next((k for k in raw_out if "nms" in k.lower()), None)
         if nms_key is None:
-            logger.error("NMS output not found")
+            logger.error("Hailo NMS output not found")
             return DetectionResult(
-                np.empty((0, 4)), np.array([]), np.array([])
+                np.empty((0, 4), dtype=np.float32),
+                np.empty((0,), dtype=np.float32),
+                np.empty((0,), dtype=np.int32),
             )
 
-        detections = raw_out[nms_key]  # LIST (important)
+        detections = raw_out[nms_key]  # LIST
 
         for det in detections:
             if len(det) < 6:
                 continue
 
-            x1, y1, x2, y2, score, cls_id = det
-            score = float(score)
-            cls_id = int(cls_id)
+            # 🔥 SAFE UNPACK (ignore extra fields)
+            x1 = float(det[0])
+            y1 = float(det[1])
+            x2 = float(det[2])
+            y2 = float(det[3])
+            score = float(det[4])
+            cls_id = int(det[5])
 
             if score < 0.2:
                 continue
