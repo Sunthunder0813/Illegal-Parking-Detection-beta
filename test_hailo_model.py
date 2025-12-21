@@ -5,7 +5,7 @@ from hailo_platform import HEF, VDevice, InferVStreams, ConfigureParams, InputVS
 
 # --- CONFIGURATION ---
 MODEL_PATH = "models/yolov8s.hef"  # Change this to your HEF path
-IMAGE_PATH = "test_image.jpg"      # Path to an image you want to test
+IMAGE_PATH = "test.jpg"      # Path to an image you want to test
 THRESHOLD = 0.3                   # Confidence threshold for detections
 
 def run_test():
