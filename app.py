@@ -75,7 +75,7 @@ class ParkingMonitor:
         # Define parking zones for each camera
         self.zones = {
             "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
-            "Camera_2": np.array([[200, 200], [1000, 200], [1000, 600], [200, 600]])
+            "Camera_2": np.array([[46, 437], [453, 253], [664, 259], [678, 438]])
         }
 
     def process(self, name, res, frame):
