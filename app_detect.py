@@ -1,40 +1,38 @@
-import numpy as np
+import logging
 from ultralytics import YOLO
 from config import MODEL_PATH
 
-# Specific COCO classes for parking detection
-NAMES = {
-    2: "car",
-    3: "motorcycle",
-    5: "bus",
-    7: "truck"
-}
-
-# Pre-calculate the indices for the 'classes' argument in track()
-CLASSES = list(NAMES.keys())
+logger = logging.getLogger("ParkingApp")
 
 _model = None
 
 def get_model():
     global _model
     if _model is None:
-        # Load the model. Ensure config.MODEL_PATH points to 'yolo11s.hef'
-        _model = YOLO(MODEL_PATH) 
+        try:
+            # Try loading the model
+            _model = YOLO(MODEL_PATH)
+            logger.info(f"Successfully loaded model: {MODEL_PATH}")
+        except Exception as e:
+            logger.error(f"CRITICAL ERROR: Could not load YOLO model at {MODEL_PATH}. Check if file is corrupted. Error: {e}")
+            return None
     return _model
 
 def detect(frames):
-    """
-    Detects and tracks vehicles using Hailo-8L.
-    Accepts a list of frames (for dual camera support).
-    """
     model = get_model()
+    if model is None:
+        # If model failed to load, return empty results so the app keeps running
+        return []
     
-    # .track handles persistent ID assignment across frames
-    results = model.track(
-        frames,
-        persist=True,      # Required to keep the same ID for a parked car
-        tracker="bytetrack.yaml", 
-        verbose=False,
-        classes=CLASSES    # Only detect vehicles (car, motorcycle, bus, truck)
-    )
-    return results
+    try:
+        results = model.track(
+            frames,
+            persist=True,
+            tracker="bytetrack.yaml",
+            verbose=False,
+            classes=[2, 3, 5, 7]
+        )
+        return results
+    except Exception as e:
+        logger.error(f"Inference error: {e}")
+        return []
