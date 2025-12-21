@@ -9,9 +9,9 @@ logger = logging.getLogger("ParkingApp")
 
 class DetectionResult:
     def __init__(self, xyxy, confs, clss):
-        self.xyxy = xyxy      # [[xmin, ymin, xmax, ymax], ...]
-        self.conf = confs     # [score, ...]
-        self.cls = clss       # [class_id, ...]
+        self.xyxy = xyxy      
+        self.conf = confs     
+        self.cls = clss       
 
 class HailoDetector:
     def __init__(self, hef_path):
@@ -26,37 +26,36 @@ class HailoDetector:
         self.input_info = self.hef.get_input_vstream_infos()[0]
         self.height, self.width, _ = self.input_info.shape
 
-        # Only detect these COCO classes
         self.monitored_classes = [0, 2, 3, 5, 7]
+        
+        # Keep pipeline persistent
+        self.activation = self.network_group.activate()
+        self.pipeline = InferVStreams(self.network_group, self.input_vstreams_params, self.output_vstreams_params)
 
     def preprocess(self, frame):
-        # Hailo expects uint8 input
         resized = cv2.resize(frame, (self.width, self.height))
         return np.expand_dims(resized, axis=0).astype(np.uint8)
 
     def postprocess(self, raw_out):
         all_boxes, all_confs, all_clss = [], [], []
-
-        # Detect NMS output key dynamically
         nms_keys = [k for k in raw_out.keys() if 'nms' in k.lower() or 'output' in k.lower()]
         if not nms_keys:
             return DetectionResult(np.array([]), np.array([]), np.array([]))
 
         detections = raw_out[nms_keys[0]]
-
-        # Handle ragged outputs safely
         try:
-            # Flatten detections to list of arrays
-            detections = [np.array(det, dtype=np.float32) for det in detections[0] if len(det) >= 6]
+            # Handle potential batch dimension or empty detections
+            if len(detections.shape) == 3: detections = detections[0]
+            valid_dets = detections[detections[:, 4] > 0.1]
         except Exception as e:
-            logger.warning(f"Error processing detections: {e}")
             return DetectionResult(np.array([]), np.array([]), np.array([]))
 
-        for det in detections:
+        for det in valid_dets:
+            # YOLOv8 HEF standard output: [ymin, xmin, ymax, xmax, score, class]
+            if len(det) < 6: continue
             score = float(det[4])
             cid = int(det[5])
-            if score > 0.1 and cid in self.monitored_classes:
-                # convert ymin, xmin, ymax, xmax -> xmin, ymin, xmax, ymax
+            if cid in self.monitored_classes:
                 all_boxes.append([float(det[1]), float(det[0]), float(det[3]), float(det[2])])
                 all_confs.append(score)
                 all_clss.append(cid)
@@ -65,11 +64,10 @@ class HailoDetector:
 
     def run_detection(self, frames):
         results = []
-        with self.lock, self.network_group.activate():
-            with InferVStreams(self.network_group, self.input_vstreams_params, self.output_vstreams_params) as pipeline:
-                for frame in frames:
-                    raw_out = pipeline.infer({self.input_info.name: self.preprocess(frame)})
-                    results.append(self.postprocess(raw_out))
+        with self.lock:
+            for frame in frames:
+                raw_out = self.pipeline.infer({self.input_info.name: self.preprocess(frame)})
+                results.append(self.postprocess(raw_out))
         return results
 
 _detector = None
