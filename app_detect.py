@@ -59,6 +59,7 @@ class HailoDetector:
     def postprocess(self, raw_out):
         boxes, scores, classes = [], [], []
 
+        # Find NMS output key
         nms_key = next((k for k in raw_out if "nms" in k.lower()), None)
         if nms_key is None:
             logger.error("Hailo NMS output not found")
@@ -70,30 +71,39 @@ class HailoDetector:
 
         detections = raw_out[nms_key]
 
+        # Flatten nested structure safely
         for det in detections:
-            # 🔥 FLATTEN EVERYTHING SAFELY
-            det = np.asarray(det).flatten()
+            # Each det might be a list of arrays
+            # Flatten recursively and collect numeric values
+            flat_det = []
 
-            if det.size < 6:
+            def flatten(item):
+                if isinstance(item, (list, tuple, np.ndarray)):
+                    for sub in item:
+                        flatten(sub)
+                else:
+                    flat_det.append(item)
+
+            flatten(det)
+
+            # Skip empty or invalid detections
+            if len(flat_det) < 6:
                 continue
 
-            x1, y1, x2, y2, score, cls_id = det[:6]
-
-            score = float(score)
+            x1, y1, x2, y2, score, cls_id = map(float, flat_det[:6])
             cls_id = int(cls_id)
 
-            if score < 0.2:
+            if score < 0.2 or cls_id not in self.monitored_classes:
                 continue
 
-            if cls_id in self.monitored_classes:
-                boxes.append([x1, y1, x2, y2])
-                scores.append(score)
-                classes.append(cls_id)
+            boxes.append([x1, y1, x2, y2])
+            scores.append(score)
+            classes.append(cls_id)
 
         return DetectionResult(
-            np.asarray(boxes, dtype=np.float32),
-            np.asarray(scores, dtype=np.float32),
-            np.asarray(classes, dtype=np.int32),
+            np.array(boxes, dtype=np.float32),
+            np.array(scores, dtype=np.float32),
+            np.array(classes, dtype=np.int32),
         )
 
     # --------------------------------------------------
