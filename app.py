@@ -91,10 +91,10 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
-        # Define parking zones for each camera
+        # Load parking zones from config.py and convert to numpy arrays
         self.zones = {
-            "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
-            "Camera_2": np.array([[46, 437], [453, 253], [664, 259], [678, 438]])
+            cam: np.array(points)
+            for cam, points in getattr(config, "PARKING_ZONES", {}).items()
         }
 
     def process(self, name, res, frame):
