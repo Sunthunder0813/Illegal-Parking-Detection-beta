@@ -6,7 +6,7 @@ import numpy as np
 import logging
 import firebase_admin
 from firebase_admin import credentials, db
-from flask import Flask, Response, render_template, jsonify, request  # add jsonify, request
+from flask import Flask, Response, render_template, jsonify, request
 import json
 from app_detect import detect
 import config
@@ -28,11 +28,9 @@ except Exception as e:
     ref = None
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
-
-# Settings management
 SETTINGS_PATH = "settings.json"
 
-# Default settings
+# Settings management
 VIOLATION_TIME_THRESHOLD = getattr(config, "VIOLATION_TIME_THRESHOLD", 10)
 REPEAT_CAPTURE_INTERVAL = getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
 current_settings = {
@@ -98,7 +96,6 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
-        # Define parking zones for each camera
         self.zones = {
             "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
             "Camera_2": np.array([[46, 437], [453, 253], [664, 259], [678, 438]])
@@ -117,17 +114,14 @@ class ParkingMonitor:
             label = CLASS_NAMES.get(d['cls'], "OBJ")
             center = ((x1+x2)//2, (y1+y2)//2)
 
-            # Person detection (Yellow box, no timer)
             if d['cls'] == 0:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
                 continue
 
-            # Vehicle in Zone logic
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
                 self.timers.setdefault((name, tid), now)
                 dur = int(now - self.timers[(name, tid)])
-                
-                is_violation = dur >= config.VIOLATION_TIME_THRESHOLD
+                is_violation = dur >= VIOLATION_TIME_THRESHOLD
                 color = (0, 0, 255) if is_violation else (0, 255, 255)
                 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -135,7 +129,7 @@ class ParkingMonitor:
 
                 if is_violation:
                     last_up = self.last_upload_time.get((name, tid), 0)
-                    if now - last_up > config.REPEAT_CAPTURE_INTERVAL:
+                    if now - last_up > REPEAT_CAPTURE_INTERVAL:
                         self.log_violation(name, tid, label, frame)
                         self.last_upload_time[(name, tid)] = now
             else:
@@ -149,13 +143,9 @@ class ParkingMonitor:
         if ref:
             try:
                 ref.push({
-                    'camera': cam, 
-                    'object_id': tid, 
-                    'type': label, 
-                    'timestamp': ts, 
-                    'local_path': path
+                    'camera': cam, 'object_id': tid, 'type': label, 
+                    'timestamp': ts, 'local_path': path
                 })
-                logger.info(f"Violation Logged: {label} on {cam}")
             except Exception as e:
                 logger.error(f"Firebase Push Error: {e}")
 
@@ -178,14 +168,14 @@ class Stream:
                     self.last_error = None
                 else:
                     self.connected = False
-                    self.last_error = "Camera disconnected or stream error"
+                    self.last_error = "Connection Lost"
                     time.sleep(2)
+                    self.cap.release()
                     self.cap = cv2.VideoCapture(self.url)
             except Exception as e:
                 self.connected = False
                 self.last_error = str(e)
                 time.sleep(2)
-                self.cap = cv2.VideoCapture(self.url)
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -193,71 +183,68 @@ c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
 def gen():
     while True:
-        active = []
-        if c1.frame is not None: active.append(("Camera_1", c1.frame.copy()))
-        if c2.frame is not None: active.append(("Camera_2", c2.frame.copy()))
+        output_frames = []
+        cam_data = [("Camera_1", c1), ("Camera_2", c2)]
         
-        if not active:
-            time.sleep(0.01)
-            continue
+        # 1. Identify which cameras are active for inference
+        active_for_yolo = []
+        for name, stream in cam_data:
+            if stream.connected and stream.frame is not None:
+                active_for_yolo.append((name, stream.frame.copy()))
+            else:
+                # Create placeholder for disconnected camera
+                black_bg = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(black_bg, f"{name} OFFLINE", (160, 220), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                cv2.putText(black_bg, "Reconnecting...", (210, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                output_frames.append(black_bg)
 
-        try:
-            results = detect([f for _, f in active])
-            out = []
-            for i, res in enumerate(results):
-                name, frame = active[i]
-                monitor.process(name, res, frame)
-                out.append(cv2.resize(frame, (640, 480)))
+        # 2. Run Detection on active streams only
+        if active_for_yolo:
+            try:
+                results = detect([f for _, f in active_for_yolo])
+                for i, res in enumerate(results):
+                    name, frame = active_for_yolo[i]
+                    monitor.process(name, res, frame)
+                    # Insert processed frame into the correct position
+                    processed = cv2.resize(frame, (640, 480))
+                    if name == "Camera_1": output_frames.insert(0, processed)
+                    else: output_frames.append(processed)
+            except Exception as e:
+                logger.error(f"Inference Error: {e}")
 
-            combined = cv2.hconcat(out) if len(out) == 2 else out[0]
+        # 3. Concatenate and yield
+        if output_frames:
+            combined = cv2.hconcat(output_frames)
             _, buf = cv2.imencode('.jpg', combined)
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-        except Exception as e:
-            logger.error(f"Gen Error: {e}")
+        
+        time.sleep(0.03)
 
 @app.route('/')
-def index():
-    return render_template("index.html")
+def index(): return render_template("index.html")
 
 @app.route('/video_feed')
 def video_feed():
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/settings.html')
-def settings_page():
-    return render_template('settings.html')
-
-@app.route('/violations.html')
-def violations_page():
-    return render_template('violations.html')
-
-@app.route('/api/settings', methods=['GET'])
-def get_settings():
-    return jsonify(current_settings)
-
-@app.route('/api/settings', methods=['POST'])
-def update_settings():
-    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
-    data = request.get_json()
-    current_settings = data
-    save_settings(data)
-    VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
-    REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
-    return jsonify({"success": True})
-
 @app.route('/api/video_status')
 def video_status():
-    status = {
-        "Camera_1": {
-            "connected": c1.connected,
-            "error": c1.last_error
-        },
-        "Camera_2": {
-            "connected": c2.connected,
-            "error": c2.last_error
-        }
-    }
-    return jsonify(status)
+    return jsonify({
+        "Camera_1": {"connected": c1.connected, "error": c1.last_error},
+        "Camera_2": {"connected": c2.connected, "error": c2.last_error}
+    })
+
+@app.route('/api/settings', methods=['GET', 'POST'])
+def handle_settings():
+    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
+    if request.method == 'POST':
+        data = request.get_json()
+        current_settings = data
+        save_settings(data)
+        VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
+        REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
+        return jsonify({"success": True})
+    return jsonify(current_settings)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
