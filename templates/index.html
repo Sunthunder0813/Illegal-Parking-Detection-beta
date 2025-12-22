@@ -6,296 +6,83 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <style>
-        body { background-color: #f8f8f8; color: #333; }
+        body {
+            background-color: #f8f8f8;
+            color: #f8f9fa;
+        }
         .video-container {
-            position: relative;
             display: flex;
-            flex-direction: column;
+            justify-content: center;
             align-items: center;
             min-height: 60vh;
         }
-        .video-frame-wrapper {
-            position: relative;
-            display: inline-block;
-            margin: 0 10px;
-        }
         .video-frame {
             border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-            border: 4px solid #212529;
-            max-width: 95vw;
-            width: 600px;
-            height: 480px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+            border: 2px solid #343a40;
+            max-width: 90vw; /* Increased from 100% to 90vw for larger display */
+            width: 1200px;   /* Explicit width for larger feeds */
             background: #000;
-            transition: opacity 0.3s, filter 0.3s;
         }
-        .video-disconnected {
-            opacity: 0.4;
-            filter: blur(2px) grayscale(0.3);
-        }
-        .video-spinner, .video-reconnect-overlay {
+        .sidebar-toggle {
             position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 10;
-            background: rgba(255,255,255,0.7);
-            border-radius: 10px;
-            padding: 30px 40px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.15);
-            text-align: center;
-        }
-        .video-spinner .spinner-border,
-        .video-reconnect-overlay .spinner-border {
-            width: 2.5rem; height: 2.5rem;
-        }
-        .video-spinner .spinner-label,
-        .video-reconnect-overlay .spinner-label {
-            display: block;
-            margin-top: 0.7rem;
-            font-weight: 500;
-            color: #212529;
-        }
-        .video-spinner { display: none; }
-        .video-reconnect-overlay { display: none; }
-        .video-overlay {
-            position: absolute;
-            top: 50%; left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(220, 53, 69, 0.9);
-            padding: 20px; border-radius: 8px;
-            z-index: 100; color: white;
-        }
-        .sidebar-toggle { position: absolute; left: 1rem; top: 1.2rem; z-index: 1051; }
-        /* Connection banner and status */
-        .connection-banner {
-            position: fixed;
-            top: 0; left: 0; right: 0;
-            background: #e74c3c;
-            color: #fff;
-            padding: 10px 0;
-            text-align: center;
-            font-weight: bold;
-            z-index: 2000;
-            display: none;
-        }
-        .server-status {
-            display: flex;
-            align-items: center;
-            gap: 7px;
-            font-size: 1rem;
-            margin-bottom: 0;
-        }
-        .server-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: #2ecc71;
-            animation: pulse 2s infinite;
-            display: inline-block;
-        }
-        .server-dot.disconnected {
-            background: #e74c3c;
-            animation: blink 0.7s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-        /* Toast notification */
-        .toast-container {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 3000;
-        }
-        .toast {
-            background: rgba(0,0,0,0.9);
-            color: #fff;
-            padding: 15px 20px;
-            border-radius: 10px;
-            margin-bottom: 10px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            animation: slideIn 0.3s ease;
-            max-width: 350px;
-        }
-        .toast.success { border-left: 4px solid #2ecc71; }
-        .toast.warning { border-left: 4px solid #f39c12; }
-        .toast.error { border-left: 4px solid #e74c3c; }
-        @keyframes slideIn {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
+            left: 1rem;
+            top: 1.2rem;
+            z-index: 1051;
         }
     </style>
 </head>
 <body>
-    <div class="connection-banner" id="connectionBanner">
-        ⚠️ Connection to server lost. Attempting to reconnect...
-    </div>
-    <div class="toast-container" id="toastContainer"></div>
-
-    <button id="sidebarToggleBtn" class="btn btn-dark sidebar-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebarMenu">
-        <i class="bi bi-list"></i>
+    <!-- Sidebar Toggle Button -->
+    <button id="sidebarToggleBtn" class="btn btn-secondary sidebar-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#sidebarMenu" aria-controls="sidebarMenu">
+    <i class="bi bi-list" style="font-size: 1.5rem;"></i>
     </button>
 
-    <div class="offcanvas offcanvas-start bg-dark text-white" tabindex="-1" id="sidebarMenu">
+    <!-- Sidebar Offcanvas -->
+    <div class="offcanvas offcanvas-start bg-dark text-white" tabindex="-1" id="sidebarMenu" aria-labelledby="sidebarMenuLabel">
         <div class="offcanvas-header">
-            <h5 class="offcanvas-title">Menu</h5>
-            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+            <h5 class="offcanvas-title" id="sidebarMenuLabel">Menu</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
         </div>
         <div class="offcanvas-body">
             <ul class="nav flex-column">
-                <li class="nav-item"><a class="nav-link text-white" href="/">Home</a></li>
-                <li class="nav-item"><a class="nav-link text-white" href="/violations.html">Violators</a></li>
-                <li class="nav-item"><a class="nav-link text-white" href="/settings.html">Settings</a></li>
+                <li class="nav-item">
+                    <a class="nav-link text-white" href="/">Home</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-white" href="violations.html">Violators</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link text-white" href="settings.html">Configure Violation Time</a>
             </ul>
         </div>
     </div>
 
-    <div class="container py-4">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h2 class="fw-bold">Illegal Parking Detection</h2>
-            <div>
-                <span class="server-status" id="serverStatus">
-                    <span class="server-dot" id="serverDot"></span>
-                    <span id="serverStatusText">Connected</span>
-                </span>
-            </div>
-            <div id="statusBadges">
-                <span id="badge-Camera_1" class="badge bg-secondary">Cam 1: Checking...</span>
-                <span id="badge-Camera_2" class="badge bg-secondary">Cam 2: Checking...</span>
-            </div>
+    <div class="container">
+        <h1 class="text-center text-dark my-4" style="font-weight: bold;">
+            Illegal Parking Detection - Live
+        </h1>
+        {% if notif %}
+        <div class="alert alert-success alert-dismissible fade show mt-3" role="alert">
+            {{ notif }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
-
-        <div class="video-container" style="flex-direction: row;">
-            <div class="video-frame-wrapper" id="wrapper-Camera_1">
-                <img id="liveFeed-Camera_1" src="/video_feed/1" class="video-frame">
-                <div id="videoSpinner-Camera_1" class="video-spinner">
-                    <div class="spinner-border text-danger" role="status"></div>
-                    <span class="spinner-label" id="spinnerLabel-Camera_1">Reconnecting...</span>
-                </div>
-            </div>
-            <div class="video-frame-wrapper" id="wrapper-Camera_2">
-                <img id="liveFeed-Camera_2" src="/video_feed/2" class="video-frame">
-                <div id="videoSpinner-Camera_2" class="video-spinner">
-                    <div class="spinner-border text-danger" role="status"></div>
-                    <span class="spinner-label" id="spinnerLabel-Camera_2">Reconnecting...</span>
-                </div>
-            </div>
+        {% endif %}
+        <div class="video-container">
+            <img src="{{ url_for('video_feed') }}" class="video-frame" alt="Live Tracking Feed">
         </div>
     </div>
-
+    <!-- Bootstrap JS Bundle CDN (optional, for future interactivity) -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // --- UI helpers ---
-        function showToast(message, type = 'info') {
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = `toast ${type}`;
-            toast.innerHTML = message;
-            container.appendChild(toast);
-            setTimeout(() => {
-                toast.style.animation = 'slideIn 0.3s ease reverse';
-                setTimeout(() => toast.remove(), 300);
-            }, 3500);
-        }
-
-        // --- Server connection logic ---
-        let serverConnected = true;
-        let lastServerResponse = Date.now();
-
-        function updateServerStatus(connected) {
-            const banner = document.getElementById('connectionBanner');
-            const serverStatus = document.getElementById('serverStatus');
-            const serverDot = document.getElementById('serverDot');
-            const serverText = document.getElementById('serverStatusText');
-            const videoReconnectOverlay = document.getElementById('videoReconnectOverlay');
-            if (connected && !serverConnected) {
-                showToast('✅ Connection restored!', 'success');
-            } else if (!connected && serverConnected) {
-                showToast('⚠️ Connection lost...', 'error');
-            }
-            serverConnected = connected;
-            if (connected) {
-                if (banner) banner.style.display = 'none';
-                if (serverStatus) serverStatus.classList.remove('disconnected');
-                if (serverDot) serverDot.className = 'server-dot';
-                if (serverText) serverText.textContent = 'Connected';
-                if (videoReconnectOverlay) videoReconnectOverlay.style.display = 'none';
-            } else {
-                if (banner) banner.style.display = 'block';
-                if (serverStatus) serverStatus.classList.add('disconnected');
-                if (serverDot) serverDot.className = 'server-dot disconnected';
-                if (serverText) serverText.textContent = 'Disconnected';
-                if (videoReconnectOverlay) videoReconnectOverlay.style.display = 'block';
-            }
-        }
-
-        function checkServerConnection() {
-            if (Date.now() - lastServerResponse > 10000) {
-                updateServerStatus(false);
-            }
-        }
-
-        // --- Camera status logic ---
-        function updateStatus() {
-            fetch('/api/video_status')
-                .then(res => res.json())
-                .then(data => {
-                    lastServerResponse = Date.now();
-                    updateServerStatus(true);
-
-                    for (const cam of ["Camera_1", "Camera_2"]) {
-                        const info = data[cam];
-                        const badge = document.getElementById(`badge-${cam}`);
-                        const liveFeed = document.getElementById(`liveFeed-${cam}`);
-                        const spinner = document.getElementById(`videoSpinner-${cam}`);
-                        const spinnerLabel = document.getElementById(`spinnerLabel-${cam}`);
-
-                        if (info && info.connected) {
-                            badge.className = "badge bg-success me-1";
-                            badge.innerHTML = `<i class="bi bi-check-circle"></i> ${cam}: Online`;
-                            liveFeed.classList.remove('video-disconnected');
-                            spinner.style.display = 'none';
-                        } else {
-                            badge.className = "badge bg-danger me-1";
-                            badge.innerHTML = `<i class="bi bi-x-circle"></i> ${cam}: Offline`;
-                            liveFeed.classList.add('video-disconnected');
-                            spinner.style.display = 'block';
-                            spinnerLabel.textContent = info && info.status_message ? info.status_message : "Reconnecting...";
-                        }
-                    }
-                })
-                .catch(() => {
-                    updateServerStatus(false);
-                    // On server error, show both as disconnected
-                    for (const cam of ["Camera_1", "Camera_2"]) {
-                        const liveFeed = document.getElementById(`liveFeed-${cam}`);
-                        const spinner = document.getElementById(`videoSpinner-${cam}`);
-                        liveFeed.classList.add('video-disconnected');
-                        spinner.style.display = 'block';
-                    }
-                });
-        }
-
-        // Poll every 2 seconds
-        setInterval(updateStatus, 2000);
-        setInterval(checkServerConnection, 2000);
-        updateStatus();
-
-        // Handle online/offline events
-        window.addEventListener('online', () => {
-            showToast('🌐 Internet restored', 'success');
-            updateStatus();
+        // Hide sidebar toggle button when sidebar is open, show when closed
+        const sidebar = document.getElementById('sidebarMenu');
+        const toggleBtn = document.getElementById('sidebarToggleBtn');
+        sidebar.addEventListener('show.bs.offcanvas', function () {
+            toggleBtn.style.display = 'none';
         });
-        window.addEventListener('offline', () => {
-            showToast('⚠️ Internet lost', 'error');
-            updateServerStatus(false);
+        sidebar.addEventListener('hidden.bs.offcanvas', function () {
+            toggleBtn.style.display = '';
         });
     </script>
 </body>
