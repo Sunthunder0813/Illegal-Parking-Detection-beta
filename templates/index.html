@@ -17,13 +17,15 @@
         .video-frame-wrapper {
             position: relative;
             display: inline-block;
+            margin: 0 10px;
         }
         .video-frame {
             border-radius: 12px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.3);
             border: 4px solid #212529;
             max-width: 95vw;
-            width: 1200px;
+            width: 600px;
+            height: 480px;
             background: #000;
             transition: opacity 0.3s, filter 0.3s;
         }
@@ -170,20 +172,20 @@
             </div>
         </div>
 
-        <div class="video-container">
-            <div class="video-frame-wrapper">
-                <img id="liveFeed" src="/video_feed" class="video-frame">
-                <div id="videoSpinner" class="video-spinner">
+        <div class="video-container" style="flex-direction: row;">
+            <div class="video-frame-wrapper" id="wrapper-Camera_1">
+                <img id="liveFeed-Camera_1" src="/video_feed?cam=1" class="video-frame">
+                <div id="videoSpinner-Camera_1" class="video-spinner">
                     <div class="spinner-border text-danger" role="status"></div>
-                    <span class="spinner-label">Reconnecting...</span>
-                </div>
-                <div id="videoReconnectOverlay" class="video-reconnect-overlay">
-                    <div class="spinner-border text-warning" role="status"></div>
-                    <span class="spinner-label">Reconnecting to server...</span>
+                    <span class="spinner-label" id="spinnerLabel-Camera_1">Reconnecting...</span>
                 </div>
             </div>
-            <div id="videoOverlay" class="video-overlay" style="display:none;">
-                <h4 class="m-0"><i class="bi bi-exclamation-triangle"></i> Server Connection Interrupted</h4>
+            <div class="video-frame-wrapper" id="wrapper-Camera_2">
+                <img id="liveFeed-Camera_2" src="/video_feed?cam=2" class="video-frame">
+                <div id="videoSpinner-Camera_2" class="video-spinner">
+                    <div class="spinner-border text-danger" role="status"></div>
+                    <span class="spinner-label" id="spinnerLabel-Camera_2">Reconnecting...</span>
+                </div>
             </div>
         </div>
     </div>
@@ -241,42 +243,43 @@
         }
 
         // --- Camera status logic ---
-        const videoOverlay = document.getElementById('videoOverlay');
-        const liveFeed = document.getElementById('liveFeed');
-        const videoSpinner = document.getElementById('videoSpinner');
-
         function updateStatus() {
             fetch('/api/video_status')
                 .then(res => res.json())
                 .then(data => {
                     lastServerResponse = Date.now();
                     updateServerStatus(true);
-                    videoOverlay.style.display = 'none';
-                    let anyDisconnected = false;
-                    for (const [cam, info] of Object.entries(data)) {
+
+                    for (const cam of ["Camera_1", "Camera_2"]) {
+                        const info = data[cam];
                         const badge = document.getElementById(`badge-${cam}`);
-                        if (info === true || (info && info.connected)) {
+                        const liveFeed = document.getElementById(`liveFeed-${cam}`);
+                        const spinner = document.getElementById(`videoSpinner-${cam}`);
+                        const spinnerLabel = document.getElementById(`spinnerLabel-${cam}`);
+
+                        if (info && info.connected) {
                             badge.className = "badge bg-success me-1";
                             badge.innerHTML = `<i class="bi bi-check-circle"></i> ${cam}: Online`;
+                            liveFeed.classList.remove('video-disconnected');
+                            spinner.style.display = 'none';
                         } else {
                             badge.className = "badge bg-danger me-1";
                             badge.innerHTML = `<i class="bi bi-x-circle"></i> ${cam}: Offline`;
-                            anyDisconnected = true;
+                            liveFeed.classList.add('video-disconnected');
+                            spinner.style.display = 'block';
+                            spinnerLabel.textContent = info && info.status_message ? info.status_message : "Reconnecting...";
                         }
-                    }
-                    if (anyDisconnected) {
-                        liveFeed.classList.add('video-disconnected');
-                        videoSpinner.style.display = 'block';
-                    } else {
-                        liveFeed.classList.remove('video-disconnected');
-                        videoSpinner.style.display = 'none';
                     }
                 })
                 .catch(() => {
                     updateServerStatus(false);
-                    videoOverlay.style.display = 'block';
-                    liveFeed.classList.add('video-disconnected');
-                    videoSpinner.style.display = 'block';
+                    // On server error, show both as disconnected
+                    for (const cam of ["Camera_1", "Camera_2"]) {
+                        const liveFeed = document.getElementById(`liveFeed-${cam}`);
+                        const spinner = document.getElementById(`videoSpinner-${cam}`);
+                        liveFeed.classList.add('video-disconnected');
+                        spinner.style.display = 'block';
+                    }
                 });
         }
 

@@ -241,62 +241,58 @@ class Stream:
 app = Flask(__name__)
 monitor = ParkingMonitor()
 c1, c2 = Stream(config.CAM1_URL, "Camera_1"), Stream(config.CAM2_URL, "Camera_2")
+CAM_MAP = {"1": ("Camera_1", c1), "2": ("Camera_2", c2)}
 
-def gen():
+def single_cam_gen(cam_name, stream):
     while True:
-        output_frames = []
-        cam_data = [("Camera_1", c1), ("Camera_2", c2)]
-        active_for_yolo = []
-
-        for name, stream in cam_data:
-            if stream.connected and stream.frame is not None:
-                # Only add to YOLO if connected
-                active_for_yolo.append((name, stream.frame.copy()))
-            else:
-                # Always show black frame for offline camera
-                black_bg = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(black_bg, f"{name} OFFLINE", (160, 220), 0, 1, (0, 0, 255), 2)
-                output_frames.append(black_bg)
-
-        # Only process detection for connected cameras
-        if active_for_yolo:
+        if stream.connected and stream.frame is not None:
+            frame = stream.frame.copy()
             try:
-                results = detect([f for _, f in active_for_yolo])
-                for i, res in enumerate(results):
-                    name, frame = active_for_yolo[i]
-                    # Only process violation logic for connected cameras
-                    monitor.process(name, res, frame)
-                    proc = cv2.resize(frame, (640, 480))
-                    # Insert in correct order
-                    if name == "Camera_1":
-                        output_frames.insert(0, proc)
-                    else:
-                        output_frames.append(proc)
+                # Run detection and overlay for this camera only
+                results = detect([frame])
+                monitor.process(cam_name, results[0], frame)
             except Exception:
-                # If detection fails, fill with black frames for all
-                output_frames = []
-                for name, stream in cam_data:
-                    black_bg = np.zeros((480, 640, 3), dtype=np.uint8)
-                    cv2.putText(black_bg, f"{name} OFFLINE", (160, 220), 0, 1, (0, 0, 255), 2)
-                    output_frames.append(black_bg)
-
-        # If both cameras are offline, output_frames will have two black frames
-        if output_frames:
-            combined = cv2.hconcat(output_frames[:2])
-            _, buf = cv2.imencode('.jpg', combined)
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+                pass
+            proc = cv2.resize(frame, (640, 480))
+        else:
+            proc = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(proc, f"{cam_name} OFFLINE", (160, 220), 0, 1, (0, 0, 255), 2)
+        _, buf = cv2.imencode('.jpg', proc)
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         time.sleep(0.03)
 
 @app.route('/')
-def index(): return render_template("index.html")
+def index():
+    return render_template("index.html")
 
 @app.route('/video_feed')
 def video_feed():
-    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    cam = request.args.get("cam")
+    if cam in CAM_MAP:
+        cam_name, stream = CAM_MAP[cam]
+        return Response(single_cam_gen(cam_name, stream), mimetype='multipart/x-mixed-replace; boundary=frame')
+    # fallback: black frame
+    def black():
+        while True:
+            proc = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(proc, "NO CAMERA", (200, 220), 0, 1, (0, 0, 255), 2)
+            _, buf = cv2.imencode('.jpg', proc)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.5)
+    return Response(black(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/api/video_status')
 def video_status():
-    return jsonify({"Camera_1": c1.connected, "Camera_2": c2.connected})
+    return jsonify({
+        "Camera_1": {
+            "connected": c1.connected,
+            "status_message": getattr(c1, "status_message", "Unknown")
+        },
+        "Camera_2": {
+            "connected": c2.connected,
+            "status_message": getattr(c2, "status_message", "Unknown")
+        }
+    })
 
 @app.route('/api/logs')
 def get_logs():
