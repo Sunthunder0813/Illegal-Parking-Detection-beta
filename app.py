@@ -6,7 +6,8 @@ import numpy as np
 import logging
 import firebase_admin
 from firebase_admin import credentials, db
-from flask import Flask, Response, render_template_string
+from flask import Flask, Response, render_template, jsonify, request
+import json
 from app_detect import detect
 import config
 
@@ -15,6 +16,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 if not os.path.exists(config.SAVE_DIR):
     os.makedirs(config.SAVE_DIR)
+
+# --- Hailo Hardware Lock ---
+# This prevents multiple threads from accessing the HailoRT driver simultaneously
+hailo_lock = threading.Lock()
 
 # --- Firebase ---
 try:
@@ -27,6 +32,31 @@ except Exception as e:
     ref = None
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
+
+# Settings management
+SETTINGS_PATH = "settings.json"
+
+# Default settings
+VIOLATION_TIME_THRESHOLD = getattr(config, "VIOLATION_TIME_THRESHOLD", 10)
+REPEAT_CAPTURE_INTERVAL = getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
+current_settings = {
+    "VIOLATION_TIME_THRESHOLD": VIOLATION_TIME_THRESHOLD,
+    "REPEAT_CAPTURE_INTERVAL": REPEAT_CAPTURE_INTERVAL
+}
+
+def load_settings():
+    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
+    if os.path.exists(SETTINGS_PATH):
+        with open(SETTINGS_PATH, "r") as f:
+            current_settings = json.load(f)
+            VIOLATION_TIME_THRESHOLD = current_settings.get("VIOLATION_TIME_THRESHOLD", VIOLATION_TIME_THRESHOLD)
+            REPEAT_CAPTURE_INTERVAL = current_settings.get("REPEAT_CAPTURE_INTERVAL", REPEAT_CAPTURE_INTERVAL)
+
+def save_settings(data):
+    with open(SETTINGS_PATH, "w") as f:
+        json.dump(data, f)
+
+load_settings()
 
 class ByteTrackLite:
     def __init__(self):
@@ -72,7 +102,6 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
-        # Define parking zones for each camera
         self.zones = {
             "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
             "Camera_2": np.array([[46, 437], [453, 253], [664, 259], [678, 438]])
@@ -91,17 +120,15 @@ class ParkingMonitor:
             label = CLASS_NAMES.get(d['cls'], "OBJ")
             center = ((x1+x2)//2, (y1+y2)//2)
 
-            # Person detection (Yellow box, no timer)
             if d['cls'] == 0:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
                 continue
 
-            # Vehicle in Zone logic
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
                 self.timers.setdefault((name, tid), now)
                 dur = int(now - self.timers[(name, tid)])
                 
-                is_violation = dur >= config.VIOLATION_TIME_THRESHOLD
+                is_violation = dur >= VIOLATION_TIME_THRESHOLD
                 color = (0, 0, 255) if is_violation else (0, 255, 255)
                 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -109,7 +136,7 @@ class ParkingMonitor:
 
                 if is_violation:
                     last_up = self.last_upload_time.get((name, tid), 0)
-                    if now - last_up > config.REPEAT_CAPTURE_INTERVAL:
+                    if now - last_up > REPEAT_CAPTURE_INTERVAL:
                         self.log_violation(name, tid, label, frame)
                         self.last_upload_time[(name, tid)] = now
             else:
@@ -138,14 +165,16 @@ class Stream:
         self.url = url
         self.cap = cv2.VideoCapture(url)
         self.frame = None
+        self.stopped = False
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        while True:
+        while not self.stopped:
             ret, f = self.cap.read()
             if ret:
                 self.frame = f
             else:
+                logger.warning(f"Stream {self.url} disconnected. Retrying...")
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
 
@@ -155,16 +184,20 @@ c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
 def gen():
     while True:
+        loop_start = time.time()
         active = []
         if c1.frame is not None: active.append(("Camera_1", c1.frame.copy()))
         if c2.frame is not None: active.append(("Camera_2", c2.frame.copy()))
         
         if not active:
-            time.sleep(0.01)
+            time.sleep(0.1)
             continue
 
         try:
-            results = detect([f for _, f in active])
+            # PROTECTED SECTION: Only one thread can use the Hailo chip at a time
+            with hailo_lock:
+                results = detect([f for _, f in active])
+            
             out = []
             for i, res in enumerate(results):
                 name, frame = active[i]
@@ -172,27 +205,48 @@ def gen():
                 out.append(cv2.resize(frame, (640, 480)))
 
             combined = cv2.hconcat(out) if len(out) == 2 else out[0]
-            _, buf = cv2.imencode('.jpg', combined)
+            _, buf = cv2.imencode('.jpg', combined, [cv2.IMWRITE_JPEG_QUALITY, 80])
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            
+            # Prevent the CPU from hammering the Hailo driver too fast
+            elapsed = time.time() - loop_start
+            if elapsed < 0.033: # Target max 30 FPS
+                time.sleep(0.033 - elapsed)
+
         except Exception as e:
             logger.error(f"Gen Error: {e}")
+            time.sleep(0.1)
 
 @app.route('/')
 def index():
-    return render_template_string("""
-        <html>
-            <head><title>Parking Monitor</title></head>
-            <body style="background:#111; color:white; text-align:center;">
-                <h1>Illegal Parking Detection - Live</h1>
-                <img src="/video_feed" style="border:2px solid #444; width:90%;">
-                <p>Status: Monitoring Camera 1 and Camera 2</p>
-            </body>
-        </html>
-    """)
+    return render_template("index.html")
 
 @app.route('/video_feed')
 def video_feed():
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/settings.html')
+def settings_page():
+    return render_template('settings.html')
+
+@app.route('/violations.html')
+def violations_page():
+    return render_template('violations.html')
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    return jsonify(current_settings)
+
+@app.route('/api/settings', methods=['POST'])
+def update_settings():
+    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
+    data = request.get_json()
+    current_settings = data
+    save_settings(data)
+    VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
+    REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
+    return jsonify({"success": True})
+
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    # threaded=True is required for Flask, but our hailo_lock handles the safety
+    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
