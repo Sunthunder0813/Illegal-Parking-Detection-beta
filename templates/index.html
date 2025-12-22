@@ -14,6 +14,10 @@
             align-items: center;
             min-height: 60vh;
         }
+        .video-frame-wrapper {
+            position: relative;
+            display: inline-block;
+        }
         .video-frame {
             border-radius: 12px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.3);
@@ -21,6 +25,32 @@
             max-width: 95vw;
             width: 1200px;
             background: #000;
+            transition: opacity 0.3s, filter 0.3s;
+        }
+        .video-disconnected {
+            opacity: 0.4;
+            filter: blur(2px) grayscale(0.3);
+        }
+        .video-spinner {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            display: none;
+            background: rgba(255,255,255,0.7);
+            border-radius: 10px;
+            padding: 30px 40px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+            text-align: center;
+        }
+        .video-spinner .spinner-border {
+            width: 2.5rem; height: 2.5rem;
+        }
+        .video-spinner .spinner-label {
+            display: block;
+            margin-top: 0.7rem;
+            font-weight: 500;
+            color: #212529;
         }
         .video-overlay {
             position: absolute;
@@ -62,7 +92,13 @@
         </div>
 
         <div class="video-container">
-            <img id="liveFeed" src="/video_feed" class="video-frame">
+            <div class="video-frame-wrapper">
+                <img id="liveFeed" src="/video_feed" class="video-frame">
+                <div id="videoSpinner" class="video-spinner">
+                    <div class="spinner-border text-danger" role="status"></div>
+                    <span class="spinner-label">Reconnecting...</span>
+                </div>
+            </div>
             <div id="videoOverlay" class="video-overlay" style="display:none;">
                 <h4 class="m-0"><i class="bi bi-exclamation-triangle"></i> Server Connection Interrupted</h4>
             </div>
@@ -72,25 +108,38 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const videoOverlay = document.getElementById('videoOverlay');
+        const liveFeed = document.getElementById('liveFeed');
+        const videoSpinner = document.getElementById('videoSpinner');
 
         function updateStatus() {
             fetch('/api/video_status')
                 .then(res => res.json())
                 .then(data => {
                     videoOverlay.style.display = 'none';
+                    let anyDisconnected = false;
                     for (const [cam, info] of Object.entries(data)) {
                         const badge = document.getElementById(`badge-${cam}`);
-                        if (info.connected) {
+                        if (info === true || (info && info.connected)) {
                             badge.className = "badge bg-success me-1";
                             badge.innerHTML = `<i class="bi bi-check-circle"></i> ${cam}: Online`;
                         } else {
                             badge.className = "badge bg-danger me-1";
                             badge.innerHTML = `<i class="bi bi-x-circle"></i> ${cam}: Offline`;
+                            anyDisconnected = true;
                         }
+                    }
+                    if (anyDisconnected) {
+                        liveFeed.classList.add('video-disconnected');
+                        videoSpinner.style.display = 'block';
+                    } else {
+                        liveFeed.classList.remove('video-disconnected');
+                        videoSpinner.style.display = 'none';
                     }
                 })
                 .catch(() => {
                     videoOverlay.style.display = 'block';
+                    liveFeed.classList.add('video-disconnected');
+                    videoSpinner.style.display = 'block';
                 });
         }
 
