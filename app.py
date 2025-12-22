@@ -168,12 +168,21 @@ def gen():
     cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
     while True:
         active = []
-        # Only add frames that are online/recent
+        online_cameras = set()
         if c1.frame is not None and c1.is_online():
             active.append(("Camera_1", c1.frame.copy()))
+            online_cameras.add("Camera_1")
         if c2.frame is not None and c2.is_online():
             active.append(("Camera_2", c2.frame.copy()))
+            online_cameras.add("Camera_2")
         
+        # Clear timers for offline cameras to avoid stale violation timing/capture
+        for cam_name in ["Camera_1", "Camera_2"]:
+            if cam_name not in online_cameras:
+                # Remove all timers and last_upload_time for this camera
+                monitor.timers = {k: v for k, v in monitor.timers.items() if k[0] != cam_name}
+                monitor.last_upload_time = {k: v for k, v in monitor.last_upload_time.items() if k[0] != cam_name}
+
         # If both are offline, show offline placeholder
         if not active:
             combined = np.hstack([offline_placeholder, offline_placeholder])
@@ -187,10 +196,11 @@ def gen():
             out = []
             for i, res in enumerate(results):
                 name, frame = active[i]
-                monitor.process(name, res, frame)
+                # Only process if camera is online (extra safety)
+                if name in online_cameras:
+                    monitor.process(name, res, frame)
                 out.append(cv2.resize(frame, (640, 480)))
 
-            # If only one camera is online, show one frame + one offline placeholder
             if len(out) == 1:
                 out.append(offline_placeholder)
             combined = cv2.hconcat(out)
