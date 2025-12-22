@@ -8,6 +8,7 @@ from flask import Flask, Response, render_template, jsonify, request  # add json
 import json
 from app_detect import detect
 import config
+import datetime
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -141,6 +142,7 @@ class Stream:
         self.url = url
         self.cap = cv2.VideoCapture(url)
         self.frame = None
+        self.last_update = None  # Track last frame update time
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
@@ -148,22 +150,36 @@ class Stream:
             ret, f = self.cap.read()
             if ret:
                 self.frame = f
+                self.last_update = time.time()
             else:
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
+
+    def is_online(self, timeout=2.0):
+        """Returns True if the stream has updated recently."""
+        return self.last_update is not None and (time.time() - self.last_update) < timeout
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
 c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
 def gen():
+    offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
     while True:
         active = []
-        if c1.frame is not None: active.append(("Camera_1", c1.frame.copy()))
-        if c2.frame is not None: active.append(("Camera_2", c2.frame.copy()))
+        # Only add frames that are online/recent
+        if c1.frame is not None and c1.is_online():
+            active.append(("Camera_1", c1.frame.copy()))
+        if c2.frame is not None and c2.is_online():
+            active.append(("Camera_2", c2.frame.copy()))
         
+        # If both are offline, show offline placeholder
         if not active:
-            time.sleep(0.01)
+            combined = np.hstack([offline_placeholder, offline_placeholder])
+            _, buf = cv2.imencode('.jpg', combined)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.5)
             continue
 
         try:
@@ -174,7 +190,10 @@ def gen():
                 monitor.process(name, res, frame)
                 out.append(cv2.resize(frame, (640, 480)))
 
-            combined = cv2.hconcat(out) if len(out) == 2 else out[0]
+            # If only one camera is online, show one frame + one offline placeholder
+            if len(out) == 1:
+                out.append(offline_placeholder)
+            combined = cv2.hconcat(out)
             _, buf = cv2.imencode('.jpg', combined)
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         except Exception as e:
