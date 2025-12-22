@@ -4,28 +4,17 @@ import time
 import os
 import numpy as np
 import logging
-import firebase_admin
-from firebase_admin import credentials, db
 from flask import Flask, Response, render_template, jsonify, request  # add jsonify, request
 import json
 from app_detect import detect
 import config
+import datetime
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 if not os.path.exists(config.SAVE_DIR):
     os.makedirs(config.SAVE_DIR)
-
-# --- Firebase ---
-try:
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
-        firebase_admin.initialize_app(cred, {'databaseURL': config.DATABASE_URL})
-    ref = db.reference('violations')
-except Exception as e:
-    logger.error(f"Firebase Init Error: {e}")
-    ref = None
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 
@@ -143,50 +132,82 @@ class ParkingMonitor:
 
     def log_violation(self, cam, tid, label, frame):
         ts = int(time.time())
-        filename = f"{cam}_{tid}_{ts}.jpg"
-        path = os.path.join(config.SAVE_DIR, filename)
+        now = datetime.datetime.now()
+        date_folder = now.strftime("%B %d, %Y (%A)")
+        date_dir = os.path.join(config.SAVE_DIR, date_folder)
+        if not os.path.exists(date_dir):
+            os.makedirs(date_dir)
+        # Format time as HH_MM_ss for filename safety
+        time_str = now.strftime("%H_%M_%S")
+        filename = f"{cam}-{time_str}.jpg"
+        path = os.path.join(date_dir, filename)
         cv2.imwrite(path, frame)
-        if ref:
-            try:
-                ref.push({
-                    'camera': cam, 
-                    'object_id': tid, 
-                    'type': label, 
-                    'timestamp': ts, 
-                    'local_path': path
-                })
-                logger.info(f"Violation Logged: {label} on {cam}")
-            except Exception as e:
-                logger.error(f"Firebase Push Error: {e}")
+        logger.info(f"Violation Logged: {label} on {cam} (saved to {path})")
 
 class Stream:
     def __init__(self, url):
         self.url = url
         self.cap = cv2.VideoCapture(url)
         self.frame = None
+        self.last_update = None  # Track last frame update time
+        self.reconnect_event = threading.Event()
+        self.reconnecting = False  # Track reconnecting state
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
+            if self.reconnect_event.is_set():
+                self.reconnecting = True
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.url)
+                self.reconnect_event.clear()
             ret, f = self.cap.read()
             if ret:
                 self.frame = f
+                self.last_update = time.time()
+                self.reconnecting = False
             else:
+                self.reconnecting = True
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
+
+    def is_online(self, timeout=2.0):
+        """Returns True if the stream has updated recently."""
+        return self.last_update is not None and (time.time() - self.last_update) < timeout
+
+    def reconnect(self):
+        self.reconnect_event.set()
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
 c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
 def gen():
+    offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
     while True:
         active = []
-        if c1.frame is not None: active.append(("Camera_1", c1.frame.copy()))
-        if c2.frame is not None: active.append(("Camera_2", c2.frame.copy()))
+        online_cameras = set()
+        if c1.frame is not None and c1.is_online():
+            active.append(("Camera_1", c1.frame.copy()))
+            online_cameras.add("Camera_1")
+        if c2.frame is not None and c2.is_online():
+            active.append(("Camera_2", c2.frame.copy()))
+            online_cameras.add("Camera_2")
         
+        # Clear timers for offline cameras to avoid stale violation timing/capture
+        for cam_name in ["Camera_1", "Camera_2"]:
+            if cam_name not in online_cameras:
+                # Remove all timers and last_upload_time for this camera
+                monitor.timers = {k: v for k, v in monitor.timers.items() if k[0] != cam_name}
+                monitor.last_upload_time = {k: v for k, v in monitor.last_upload_time.items() if k[0] != cam_name}
+
+        # If both are offline, show offline placeholder
         if not active:
-            time.sleep(0.01)
+            combined = np.hstack([offline_placeholder, offline_placeholder])
+            _, buf = cv2.imencode('.jpg', combined)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.5)
             continue
 
         try:
@@ -194,14 +215,36 @@ def gen():
             out = []
             for i, res in enumerate(results):
                 name, frame = active[i]
-                monitor.process(name, res, frame)
+                # Only process if camera is online (extra safety)
+                if name in online_cameras:
+                    monitor.process(name, res, frame)
                 out.append(cv2.resize(frame, (640, 480)))
 
-            combined = cv2.hconcat(out) if len(out) == 2 else out[0]
+            if len(out) == 1:
+                out.append(offline_placeholder)
+            combined = cv2.hconcat(out)
             _, buf = cv2.imencode('.jpg', combined)
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         except Exception as e:
             logger.error(f"Gen Error: {e}")
+
+def gen_single(cam, cam_name):
+    offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+    while True:
+        if cam.frame is not None and cam.is_online():
+            frame = cam.frame.copy()
+            try:
+                results = detect([frame])
+                monitor.process(cam_name, results[0], frame)
+            except Exception as e:
+                logger.error(f"{cam_name} Gen Error: {e}")
+            out = cv2.resize(frame, (640, 480))
+        else:
+            out = offline_placeholder
+        _, buf = cv2.imencode('.jpg', out)
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+        time.sleep(0.03)
 
 @app.route('/')
 def index():
@@ -209,7 +252,16 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
+    # (Optional: keep for backward compatibility, or remove if not needed)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video_feed_c1')
+def video_feed_c1():
+    return Response(gen_single(c1, "Camera_1"), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video_feed_c2')
+def video_feed_c2():
+    return Response(gen_single(c2, "Camera_2"), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/settings.html')
 def settings_page():
@@ -232,6 +284,28 @@ def update_settings():
     VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
     REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
     return jsonify({"success": True})
+
+@app.route('/api/reconnect/<camera>', methods=['POST'])
+def reconnect_camera(camera):
+    if camera == "Camera_1":
+        c1.reconnect()
+        return jsonify({"success": True, "message": "Camera_1 reconnect triggered"})
+    elif camera == "Camera_2":
+        c2.reconnect()
+        return jsonify({"success": True, "message": "Camera_2 reconnect triggered"})
+    else:
+        return jsonify({"success": False, "message": "Unknown camera"}), 400
+
+@app.route('/api/camera_status')
+def camera_status():
+    return jsonify({
+        "Camera_1": {
+            "reconnecting": bool(getattr(c1, "reconnecting", False))
+        },
+        "Camera_2": {
+            "reconnecting": bool(getattr(c2, "reconnecting", False))
+        }
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
