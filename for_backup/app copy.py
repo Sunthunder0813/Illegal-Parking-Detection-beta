@@ -9,6 +9,7 @@ import json
 from app_detect import detect
 import config
 import datetime
+import queue
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -185,7 +186,11 @@ app = Flask(__name__)
 monitor = ParkingMonitor()
 c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
-def gen():
+# Shared latest processed frames for each camera
+latest_frames = {"Camera_1": None, "Camera_2": None}
+latest_frames_lock = threading.Lock()
+
+def background_detection_loop():
     offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
     cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
     while True:
@@ -201,51 +206,64 @@ def gen():
         # Clear timers for offline cameras to avoid stale violation timing/capture
         for cam_name in ["Camera_1", "Camera_2"]:
             if cam_name not in online_cameras:
-                # Remove all timers and last_upload_time for this camera
                 monitor.timers = {k: v for k, v in monitor.timers.items() if k[0] != cam_name}
                 monitor.last_upload_time = {k: v for k, v in monitor.last_upload_time.items() if k[0] != cam_name}
 
-        # If both are offline, show offline placeholder
-        if not active:
-            combined = np.hstack([offline_placeholder, offline_placeholder])
-            _, buf = cv2.imencode('.jpg', combined)
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.5)
-            continue
-
         try:
-            results = detect([f for _, f in active])
-            out = []
-            for i, res in enumerate(results):
-                name, frame = active[i]
-                # Only process if camera is online (extra safety)
-                if name in online_cameras:
-                    monitor.process(name, res, frame)
-                out.append(cv2.resize(frame, (640, 480)))
+            if active:
+                results = detect([f for _, f in active])
+                with latest_frames_lock:
+                    for i, res in enumerate(results):
+                        name, frame = active[i]
+                        monitor.process(name, res, frame)
+                        # Store the processed frame (resize for consistency)
+                        latest_frames[name] = cv2.resize(frame, (640, 480))
+            else:
+                with latest_frames_lock:
+                    latest_frames["Camera_1"] = offline_placeholder
+                    latest_frames["Camera_2"] = offline_placeholder
+        except Exception as e:
+            logger.error(f"Background Detection Error: {e}")
+        time.sleep(0.03)
 
-            if len(out) == 1:
+# Start background detection thread
+threading.Thread(target=background_detection_loop, daemon=True).start()
+
+def gen():
+    while True:
+        with latest_frames_lock:
+            frame1 = latest_frames.get("Camera_1")
+            frame2 = latest_frames.get("Camera_2")
+            out = []
+            if frame1 is not None:
+                out.append(frame1)
+            if frame2 is not None:
+                out.append(frame2)
+            if not out:
+                # fallback placeholder
+                offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+                out = [offline_placeholder, offline_placeholder]
+            elif len(out) == 1:
+                offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
                 out.append(offline_placeholder)
             combined = cv2.hconcat(out)
             _, buf = cv2.imencode('.jpg', combined)
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-        except Exception as e:
-            logger.error(f"Gen Error: {e}")
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+        time.sleep(0.03)
 
 def gen_single(cam, cam_name):
     offline_placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
     cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (120, 360), 0, 2.2, (0,0,255), 5, cv2.LINE_AA)
     while True:
-        if cam.frame is not None and cam.is_online():
-            frame = cam.frame.copy()
-            try:
-                results = detect([frame])
-                monitor.process(cam_name, results[0], frame)
-            except Exception as e:
-                logger.error(f"{cam_name} Gen Error: {e}")
-            out = frame  # No resize, send full frame
-        else:
-            out = offline_placeholder
-        _, buf = cv2.imencode('.jpg', out)
+        with latest_frames_lock:
+            frame = latest_frames.get(cam_name)
+            if frame is not None:
+                out = cv2.resize(frame, (1280, 720))
+            else:
+                out = offline_placeholder
+            _, buf = cv2.imencode('.jpg', out)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         time.sleep(0.03)
 

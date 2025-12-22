@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Zone Selector</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        #canvas { border: 2px solid #333; cursor: crosshair; }
+        #controls { margin: 10px 0; }
+        #camera-select { margin-right: 10px; }
+        #save-btn { margin-left: 10px; }
+    </style>
+</head>
+<body>
+    <h2>Zone Selector</h2>
+    <div id="controls">
+        <label for="camera-select">Camera:</label>
+        <select id="camera-select">
+            <option value="Camera_1">Camera 1</option>
+            <option value="Camera_2">Camera 2</option>
+        </select>
+        <button id="undo-btn">Undo</button>
+        <button id="clear-btn">Clear</button>
+        <button id="save-btn">Save &amp; Go to Main</button>
+    </div>
+    <canvas id="canvas" width="640" height="480"></canvas>
+    <div id="msg"></div>
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const cameraSelect = document.getElementById('camera-select');
+        const undoBtn = document.getElementById('undo-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const saveBtn = document.getElementById('save-btn');
+        const msgDiv = document.getElementById('msg');
+        let points = [];
+        let zones = {};
+        let currentCamera = cameraSelect.value;
+        let img = new Image();
+
+        function fetchFrame() {
+            // Use the single camera feed for background
+            let url = currentCamera === "Camera_1" ? "/video_feed_c1" : "/video_feed_c2";
+            // Use a snapshot endpoint if available, else fallback to MJPEG
+            fetch(url + "?snapshot=1")
+                .then(resp => resp.blob())
+                .then(blob => {
+                    img.src = URL.createObjectURL(blob);
+                });
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (img.complete && img.naturalWidth) {
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            }
+            // Draw polygon
+            if (points.length > 0) {
+                ctx.beginPath();
+                ctx.moveTo(points[0][0], points[0][1]);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i][0], points[i][1]);
+                }
+                ctx.closePath();
+                ctx.strokeStyle = "#00FF00";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                // Draw points
+                for (let pt of points) {
+                    ctx.beginPath();
+                    ctx.arc(pt[0], pt[1], 5, 0, 2 * Math.PI);
+                    ctx.fillStyle = "#FF0000";
+                    ctx.fill();
+                }
+            }
+        }
+
+        function updatePointsFromZones() {
+            points = zones[currentCamera] ? zones[currentCamera].map(pt => [...pt]) : [];
+        }
+
+        // Mouse events
+        canvas.addEventListener('mousedown', e => {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round(e.clientX - rect.left);
+            const y = Math.round(e.clientY - rect.top);
+            points.push([x, y]);
+            draw();
+        });
+
+        undoBtn.onclick = () => {
+            points.pop();
+            draw();
+        };
+        clearBtn.onclick = () => {
+            points = [];
+            draw();
+        };
+        cameraSelect.onchange = () => {
+            currentCamera = cameraSelect.value;
+            updatePointsFromZones();
+            fetchFrame();
+            draw();
+        };
+
+        saveBtn.onclick = () => {
+            zones[currentCamera] = points.map(pt => [...pt]);
+            // Save all zones to backend
+            fetch('/api/zones', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(zones)
+            }).then(resp => resp.json())
+              .then(data => {
+                  if (data.success) {
+                      msgDiv.textContent = "Zone saved! Redirecting to main page...";
+                      setTimeout(() => { window.location.href = "/"; }, 1200);
+                  } else {
+                      msgDiv.textContent = "Failed to save zone.";
+                  }
+              });
+        };
+
+        // Initial load: get zones and frame
+        fetch('/api/zones').then(resp => resp.json()).then(data => {
+            zones = data;
+            updatePointsFromZones();
+            fetchFrame();
+            draw();
+        });
+
+        img.onload = draw;
+
+        // Optionally refresh frame every few seconds
+        setInterval(fetchFrame, 2000);
+    </script>
+</body>
+</html>
