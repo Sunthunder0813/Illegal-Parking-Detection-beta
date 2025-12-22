@@ -144,13 +144,25 @@ class Stream:
     def __init__(self, url, name):
         self.url = url
         self.name = name
-        self.cap = cv2.VideoCapture(url)
+        self.cap = None
         self.frame = None
         self.connected = False
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
+            if self.cap is None or not self.cap.isOpened():
+                try:
+                    self.cap = cv2.VideoCapture(self.url)
+                    if not self.cap.isOpened():
+                        self.connected = False
+                        time.sleep(2)
+                        continue
+                except Exception:
+                    self.connected = False
+                    time.sleep(2)
+                    continue
+
             try:
                 ret, f = self.cap.read()
                 if ret:
@@ -163,11 +175,14 @@ class Stream:
                         add_log(self.name, "No record received - Disconnected", "offline")
                     self.connected = False
                     self.cap.release()
-                    time.sleep(3)
-                    self.cap = cv2.VideoCapture(self.url)
+                    self.cap = None
+                    time.sleep(2)
             except Exception:
                 self.connected = False
-                time.sleep(3)
+                if self.cap:
+                    self.cap.release()
+                    self.cap = None
+                time.sleep(2)
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -178,26 +193,40 @@ def gen():
         output_frames = []
         cam_data = [("Camera_1", c1), ("Camera_2", c2)]
         active_for_yolo = []
-        
+
         for name, stream in cam_data:
             if stream.connected and stream.frame is not None:
+                # Only add to YOLO if connected
                 active_for_yolo.append((name, stream.frame.copy()))
             else:
+                # Always show black frame for offline camera
                 black_bg = np.zeros((480, 640, 3), dtype=np.uint8)
                 cv2.putText(black_bg, f"{name} OFFLINE", (160, 220), 0, 1, (0, 0, 255), 2)
                 output_frames.append(black_bg)
 
+        # Only process detection for connected cameras
         if active_for_yolo:
             try:
                 results = detect([f for _, f in active_for_yolo])
                 for i, res in enumerate(results):
                     name, frame = active_for_yolo[i]
+                    # Only process violation logic for connected cameras
                     monitor.process(name, res, frame)
                     proc = cv2.resize(frame, (640, 480))
-                    if name == "Camera_1": output_frames.insert(0, proc)
-                    else: output_frames.append(proc)
-            except Exception: pass
+                    # Insert in correct order
+                    if name == "Camera_1":
+                        output_frames.insert(0, proc)
+                    else:
+                        output_frames.append(proc)
+            except Exception:
+                # If detection fails, fill with black frames for all
+                output_frames = []
+                for name, stream in cam_data:
+                    black_bg = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(black_bg, f"{name} OFFLINE", (160, 220), 0, 1, (0, 0, 255), 2)
+                    output_frames.append(black_bg)
 
+        # If both cameras are offline, output_frames will have two black frames
         if output_frames:
             combined = cv2.hconcat(output_frames[:2])
             _, buf = cv2.imencode('.jpg', combined)
