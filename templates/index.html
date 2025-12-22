@@ -20,9 +20,8 @@
             border-radius: 12px;
             box-shadow: 0 4px 24px rgba(0,0,0,0.5);
             border: 2px solid #343a40;
-            max-width: 100%;
-            width: auto;
-            height: auto;
+            max-width: 100vw; /* Increased from 90vw to 98vw */
+            width: 2560px;   /* Increased from 1500px to 1920px for larger feeds */
             background: #000;
         }
         .sidebar-toggle {
@@ -30,32 +29,6 @@
             left: 1rem;
             top: 1.2rem;
             z-index: 1051;
-        }
-        /* Mobile and Tablet Responsive Styles */
-        @media (max-width: 768px) {
-            .video-container {
-                min-height: 40vh;
-                padding: 1rem;
-            }
-            h1 {
-                font-size: 1.5rem !important;
-            }
-            .sidebar-toggle {
-                left: 0.5rem;
-                top: 0.8rem;
-            }
-        }
-        @media (max-width: 480px) {
-            .video-container {
-                min-height: 30vh;
-                padding: 0.5rem;
-            }
-            h1 {
-                font-size: 1.2rem !important;
-            }
-            .sidebar-toggle i {
-                font-size: 1.2rem !important;
-            }
         }
     </style>
 </head>
