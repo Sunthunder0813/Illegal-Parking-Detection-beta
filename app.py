@@ -143,10 +143,15 @@ class Stream:
         self.cap = cv2.VideoCapture(url)
         self.frame = None
         self.last_update = None  # Track last frame update time
+        self.reconnect_event = threading.Event()
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
+            if self.reconnect_event.is_set():
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.url)
+                self.reconnect_event.clear()
             ret, f = self.cap.read()
             if ret:
                 self.frame = f
@@ -158,6 +163,9 @@ class Stream:
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
         return self.last_update is not None and (time.time() - self.last_update) < timeout
+
+    def reconnect(self):
+        self.reconnect_event.set()
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -238,6 +246,17 @@ def update_settings():
     VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
     REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
     return jsonify({"success": True})
+
+@app.route('/api/reconnect/<camera>', methods=['POST'])
+def reconnect_camera(camera):
+    if camera == "Camera_1":
+        c1.reconnect()
+        return jsonify({"success": True, "message": "Camera_1 reconnect triggered"})
+    elif camera == "Camera_2":
+        c2.reconnect()
+        return jsonify({"success": True, "message": "Camera_2 reconnect triggered"})
+    else:
+        return jsonify({"success": False, "message": "Unknown camera"}), 400
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
