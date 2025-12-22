@@ -4,8 +4,6 @@ import time
 import os
 import numpy as np
 import logging
-import firebase_admin
-from firebase_admin import credentials, db
 from flask import Flask, Response, render_template, jsonify, request  # add jsonify, request
 import json
 from app_detect import detect
@@ -16,16 +14,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 if not os.path.exists(config.SAVE_DIR):
     os.makedirs(config.SAVE_DIR)
-
-# --- Firebase ---
-try:
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(config.FIREBASE_KEY_PATH)
-        firebase_admin.initialize_app(cred, {'databaseURL': config.DATABASE_URL})
-    ref = db.reference('violations')
-except Exception as e:
-    logger.error(f"Firebase Init Error: {e}")
-    ref = None
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 
@@ -146,18 +134,7 @@ class ParkingMonitor:
         filename = f"{cam}_{tid}_{ts}.jpg"
         path = os.path.join(config.SAVE_DIR, filename)
         cv2.imwrite(path, frame)
-        if ref:
-            try:
-                ref.push({
-                    'camera': cam, 
-                    'object_id': tid, 
-                    'type': label, 
-                    'timestamp': ts, 
-                    'local_path': path
-                })
-                logger.info(f"Violation Logged: {label} on {cam}")
-            except Exception as e:
-                logger.error(f"Firebase Push Error: {e}")
+        logger.info(f"Violation Logged: {label} on {cam} (saved to {path})")
 
 class Stream:
     def __init__(self, url):
