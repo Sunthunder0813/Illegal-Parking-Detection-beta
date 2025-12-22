@@ -4,7 +4,7 @@ import time
 import os
 import numpy as np
 import logging
-from flask import Flask, Response, render_template, jsonify, request  # add jsonify, request
+from flask import Flask, Response, render_template, jsonify, request
 import json
 from app_detect import detect
 import config
@@ -18,30 +18,33 @@ if not os.path.exists(config.SAVE_DIR):
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 
-# Settings management
-SETTINGS_PATH = "settings.json"
+# Settings management (now only via config.py)
+def get_current_settings():
+    return {
+        "VIOLATION_TIME_THRESHOLD": getattr(config, "VIOLATION_TIME_THRESHOLD", 10),
+        "REPEAT_CAPTURE_INTERVAL": getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
+    }
 
-# Default settings
-VIOLATION_TIME_THRESHOLD = getattr(config, "VIOLATION_TIME_THRESHOLD", 10)
-REPEAT_CAPTURE_INTERVAL = getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
-current_settings = {
-    "VIOLATION_TIME_THRESHOLD": VIOLATION_TIME_THRESHOLD,
-    "REPEAT_CAPTURE_INTERVAL": REPEAT_CAPTURE_INTERVAL
-}
-
-def load_settings():
-    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
-    if os.path.exists(SETTINGS_PATH):
-        with open(SETTINGS_PATH, "r") as f:
-            current_settings = json.load(f)
-            VIOLATION_TIME_THRESHOLD = current_settings.get("VIOLATION_TIME_THRESHOLD", VIOLATION_TIME_THRESHOLD)
-            REPEAT_CAPTURE_INTERVAL = current_settings.get("REPEAT_CAPTURE_INTERVAL", REPEAT_CAPTURE_INTERVAL)
-
-def save_settings(data):
-    with open(SETTINGS_PATH, "w") as f:
-        json.dump(data, f)
-
-load_settings()
+def update_config_py(new_settings):
+    import re
+    config_path = os.path.join(os.path.dirname(__file__), "config.py")
+    with open(config_path, "r") as f:
+        lines = f.readlines()
+    def replace_line(key, value):
+        pattern = re.compile(rf"^{key}\s*=\s*.*$")
+        for i, line in enumerate(lines):
+            if pattern.match(line):
+                lines[i] = f"{key} = {value}\n"
+                return
+        # If not found, append
+        lines.append(f"{key} = {value}\n")
+    replace_line("VIOLATION_TIME_THRESHOLD", new_settings["VIOLATION_TIME_THRESHOLD"])
+    replace_line("REPEAT_CAPTURE_INTERVAL", new_settings["REPEAT_CAPTURE_INTERVAL"])
+    with open(config_path, "w") as f:
+        f.writelines(lines)
+    # Reload config module
+    import importlib
+    importlib.reload(config)
 
 class ByteTrackLite:
     def __init__(self):
@@ -229,8 +232,8 @@ def gen():
             logger.error(f"Gen Error: {e}")
 
 def gen_single(cam, cam_name):
-    offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+    offline_placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
+    cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (120, 360), 0, 2.2, (0,0,255), 5, cv2.LINE_AA)
     while True:
         if cam.frame is not None and cam.is_online():
             frame = cam.frame.copy()
@@ -239,7 +242,7 @@ def gen_single(cam, cam_name):
                 monitor.process(cam_name, results[0], frame)
             except Exception as e:
                 logger.error(f"{cam_name} Gen Error: {e}")
-            out = cv2.resize(frame, (640, 480))
+            out = frame  # No resize, send full frame
         else:
             out = offline_placeholder
         _, buf = cv2.imencode('.jpg', out)
@@ -273,16 +276,12 @@ def violations_page():
 
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
-    return jsonify(current_settings)
+    return jsonify(get_current_settings())
 
 @app.route('/api/settings', methods=['POST'])
 def update_settings():
-    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
     data = request.get_json()
-    current_settings = data
-    save_settings(data)
-    VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
-    REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
+    update_config_py(data)
     return jsonify({"success": True})
 
 @app.route('/api/reconnect/<camera>', methods=['POST'])
