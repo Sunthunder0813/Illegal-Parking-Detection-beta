@@ -24,7 +24,8 @@
             box-shadow: 0 4px 24px rgba(0,0,0,0.5);
             border: 2px solid #343a40;
             max-width: 100vw;
-            width: 2560px;
+            width: 1280px;
+            height: 720px;
             background: #000;
         }
         .sidebar-toggle {
@@ -187,8 +188,9 @@
         </div>
         {% endif %}
         <div class="video-outer">
-            <div class="video-container" id="videoContainer">
-                <img src="{{ url_for('video_feed') }}" class="video-frame" alt="Live Tracking Feed" id="liveVideo">
+            <div class="video-container" id="videoContainer" style="flex-direction: row;">
+                <img src="{{ url_for('video_feed_c1') }}" class="video-frame" alt="CCTV 1 Feed" id="liveVideoC1">
+                <img src="{{ url_for('video_feed_c2') }}" class="video-frame" alt="CCTV 2 Feed" id="liveVideoC2">
             </div>
             <div class="reconnecting-overlay" id="reconnectingOverlay">
                 <div class="reconnecting-spinner">
@@ -222,12 +224,14 @@
                 // If any camera is reconnecting, show overlay
                 reconnecting = status.Camera_1.reconnecting || status.Camera_2.reconnecting;
                 overlay.classList.toggle('active', reconnecting);
-                // Optionally blur the video frame
-                document.getElementById('liveVideo').style.filter = reconnecting ? 'blur(6px) grayscale(0.4)' : '';
+                // Optionally blur the video frames
+                document.getElementById('liveVideoC1').style.filter = status.Camera_1.reconnecting ? 'blur(6px) grayscale(0.4)' : '';
+                document.getElementById('liveVideoC2').style.filter = status.Camera_2.reconnecting ? 'blur(6px) grayscale(0.4)' : '';
             } catch (e) {
                 // On error, show overlay as fallback
                 overlay.classList.add('active');
-                document.getElementById('liveVideo').style.filter = 'blur(6px) grayscale(0.4)';
+                document.getElementById('liveVideoC1').style.filter = 'blur(6px) grayscale(0.4)';
+                document.getElementById('liveVideoC2').style.filter = 'blur(6px) grayscale(0.4)';
             }
         }
         setInterval(checkCameraStatus, 1200);
