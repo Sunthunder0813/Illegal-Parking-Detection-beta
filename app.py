@@ -6,8 +6,7 @@ import numpy as np
 import logging
 import firebase_admin
 from firebase_admin import credentials, db
-from flask import Flask, Response, render_template, jsonify, request  # add jsonify, request
-import json
+from flask import Flask, Response, render_template_string
 from app_detect import detect
 import config
 
@@ -28,31 +27,6 @@ except Exception as e:
     ref = None
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
-
-# Settings management
-SETTINGS_PATH = "settings.json"
-
-# Default settings
-VIOLATION_TIME_THRESHOLD = getattr(config, "VIOLATION_TIME_THRESHOLD", 10)
-REPEAT_CAPTURE_INTERVAL = getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
-current_settings = {
-    "VIOLATION_TIME_THRESHOLD": VIOLATION_TIME_THRESHOLD,
-    "REPEAT_CAPTURE_INTERVAL": REPEAT_CAPTURE_INTERVAL
-}
-
-def load_settings():
-    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
-    if os.path.exists(SETTINGS_PATH):
-        with open(SETTINGS_PATH, "r") as f:
-            current_settings = json.load(f)
-            VIOLATION_TIME_THRESHOLD = current_settings.get("VIOLATION_TIME_THRESHOLD", VIOLATION_TIME_THRESHOLD)
-            REPEAT_CAPTURE_INTERVAL = current_settings.get("REPEAT_CAPTURE_INTERVAL", REPEAT_CAPTURE_INTERVAL)
-
-def save_settings(data):
-    with open(SETTINGS_PATH, "w") as f:
-        json.dump(data, f)
-
-load_settings()
 
 class ByteTrackLite:
     def __init__(self):
@@ -205,33 +179,20 @@ def gen():
 
 @app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template_string("""
+        <html>
+            <head><title>Parking Monitor</title></head>
+            <body style="background:#111; color:white; text-align:center;">
+                <h1>Illegal Parking Detection - Live</h1>
+                <img src="/video_feed" style="border:2px solid #444; width:90%;">
+                <p>Status: Monitoring Camera 1 and Camera 2</p>
+            </body>
+        </html>
+    """)
 
 @app.route('/video_feed')
 def video_feed():
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-@app.route('/settings.html')
-def settings_page():
-    return render_template('settings.html')
-
-@app.route('/violations.html')
-def violations_page():
-    return render_template('violations.html')
-
-@app.route('/api/settings', methods=['GET'])
-def get_settings():
-    return jsonify(current_settings)
-
-@app.route('/api/settings', methods=['POST'])
-def update_settings():
-    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
-    data = request.get_json()
-    current_settings = data
-    save_settings(data)
-    VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
-    REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
-    return jsonify({"success": True})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
