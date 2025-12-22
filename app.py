@@ -143,6 +143,7 @@ class Stream:
         self.cap = cv2.VideoCapture(url)
         self.frame = None
         self.last_update = None  # Track last frame update time
+        self.reconnecting = False  # Track reconnecting state
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
@@ -151,13 +152,18 @@ class Stream:
             if ret:
                 self.frame = f
                 self.last_update = time.time()
+                self.reconnecting = False
             else:
+                self.reconnecting = True
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
 
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
         return self.last_update is not None and (time.time() - self.last_update) < timeout
+
+    def is_reconnecting(self):
+        return self.reconnecting
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -238,6 +244,19 @@ def update_settings():
     VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
     REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
     return jsonify({"success": True})
+
+@app.route('/api/camera_status')
+def camera_status():
+    return jsonify({
+        "Camera_1": {
+            "online": c1.is_online(),
+            "reconnecting": c1.is_reconnecting()
+        },
+        "Camera_2": {
+            "online": c2.is_online(),
+            "reconnecting": c2.is_reconnecting()
+        }
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
