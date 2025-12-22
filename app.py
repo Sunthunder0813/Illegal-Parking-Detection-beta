@@ -147,42 +147,96 @@ class Stream:
         self.cap = None
         self.frame = None
         self.connected = False
+        self.running = True
+        self.retry_count = 0
+        self.last_frame_time = None
+        self.status_message = "Initializing..."
+        self.stabilization_period = 3  # seconds
+        self.valid_frame_count = 0
+        self.frames_needed_for_stable = 5
+        self.is_stabilizing = True
         threading.Thread(target=self._run, daemon=True).start()
 
-    def _run(self):
-        while True:
-            if self.cap is None or not self.cap.isOpened():
+    def _try_connect(self, max_retries=3, retry_delay=0.3):
+        self.retry_count = 0
+        while self.running and self.retry_count < max_retries:
+            self.retry_count += 1
+            if self.cap:
                 try:
-                    self.cap = cv2.VideoCapture(self.url)
-                    if not self.cap.isOpened():
-                        self.connected = False
-                        time.sleep(2)
-                        continue
-                except Exception:
-                    self.connected = False
-                    time.sleep(2)
+                    self.cap.release()
+                except:
+                    pass
+            self.cap = cv2.VideoCapture(self.url)
+            if self.cap.isOpened():
+                ret = self.cap.grab()
+                if ret:
+                    ret, _ = self.cap.retrieve()
+                    if ret:
+                        self.connected = True
+                        self.valid_frame_count = 0
+                        self.is_stabilizing = True
+                        self.last_frame_time = time.time()
+                        self.status_message = "Stabilizing..."
+                        return True
+            self.connected = False
+            self.status_message = f"Connecting... ({self.retry_count}/{max_retries})"
+            time.sleep(retry_delay)
+        self.status_message = "Offline - Retrying..."
+        return False
+
+    def _run(self):
+        while self.running:
+            if not self.connected:
+                if not self._try_connect():
+                    time.sleep(1)
                     continue
 
             try:
-                ret, f = self.cap.read()
-                if ret:
-                    if not self.connected:
-                        add_log(self.name, "Stream Restored", "online")
-                    self.frame = f
-                    self.connected = True
+                if self.cap and self.cap.grab():
+                    ret, f = self.cap.retrieve()
+                    if ret:
+                        self.frame = f
+                        now = time.time()
+                        self.last_frame_time = now
+                        if self.is_stabilizing:
+                            self.valid_frame_count += 1
+                            if self.valid_frame_count >= self.frames_needed_for_stable:
+                                self.is_stabilizing = False
+                                self.status_message = "Connected"
+                                add_log(self.name, "Stream Restored", "online")
+                        else:
+                            self.status_message = "Connected"
+                        self.connected = True
+                    else:
+                        self._handle_read_failure()
                 else:
-                    if self.connected:
-                        add_log(self.name, "No record received - Disconnected", "offline")
-                    self.connected = False
-                    self.cap.release()
-                    self.cap = None
-                    time.sleep(2)
+                    self._handle_read_failure()
             except Exception:
-                self.connected = False
-                if self.cap:
-                    self.cap.release()
-                    self.cap = None
-                time.sleep(2)
+                self._handle_read_failure()
+            # Timeout logic: if no frame for 3s, reconnect
+            if self.connected and self.last_frame_time:
+                if time.time() - self.last_frame_time > 3:
+                    self.status_message = "Reconnecting..."
+                    self.connected = False
+                    if self.cap:
+                        try:
+                            self.cap.release()
+                        except:
+                            pass
+                        self.cap = None
+                    add_log(self.name, "No record received - Disconnected", "offline")
+            time.sleep(0.03)
+
+    def _handle_read_failure(self):
+        self.connected = False
+        self.status_message = "Reconnecting..."
+        if self.cap:
+            try:
+                self.cap.release()
+            except:
+                pass
+            self.cap = None
+        time.sleep(0.3)
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
