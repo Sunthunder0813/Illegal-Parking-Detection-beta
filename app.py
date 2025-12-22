@@ -4,7 +4,7 @@ import time
 import os
 import numpy as np
 import logging
-from flask import Flask, Response, render_template, jsonify, request, redirect, url_for
+from flask import Flask, Response, render_template, jsonify, request
 import json
 from app_detect import detect
 import config
@@ -46,23 +46,6 @@ def update_config_py(new_settings):
     # Reload config module
     import importlib
     importlib.reload(config)
-
-# --- Add: Zone configuration persistence ---
-ZONE_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "zone_config.json")
-
-def load_zones():
-    if os.path.exists(ZONE_CONFIG_PATH):
-        with open(ZONE_CONFIG_PATH, "r") as f:
-            return json.load(f)
-    # Default zones (as in original code)
-    return {
-        "Camera_1": [[249, 242], [255, 404], [654, 426], [443, 261]],
-        "Camera_2": [[46, 437], [453, 253], [664, 259], [678, 438]]
-    }
-
-def save_zones(zones):
-    with open(ZONE_CONFIG_PATH, "w") as f:
-        json.dump(zones, f)
 
 class ByteTrackLite:
     def __init__(self):
@@ -108,17 +91,10 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
-        # Load zones from config
-        loaded_zones = load_zones()
+        # Define parking zones for each camera
         self.zones = {
-            "Camera_1": np.array(loaded_zones.get("Camera_1"), np.int32),
-            "Camera_2": np.array(loaded_zones.get("Camera_2"), np.int32)
-        }
-
-    def update_zones(self, new_zones):
-        self.zones = {
-            "Camera_1": np.array(new_zones.get("Camera_1"), np.int32),
-            "Camera_2": np.array(new_zones.get("Camera_2"), np.int32)
+            "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
+            "Camera_2": np.array([[46, 437], [453, 253], [664, 259], [678, 438]])
         }
 
     def process(self, name, res, frame):
@@ -316,10 +292,6 @@ def settings_page():
 def violations_page():
     return render_template('violations.html')
 
-@app.route('/zone_selector.html')
-def zone_selector_page():
-    return render_template('zone_selector.html')
-
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
     return jsonify(get_current_settings())
@@ -351,17 +323,6 @@ def camera_status():
             "reconnecting": bool(getattr(c2, "reconnecting", False))
         }
     })
-
-@app.route('/api/zones', methods=['GET'])
-def get_zones():
-    return jsonify(load_zones())
-
-@app.route('/api/zones', methods=['POST'])
-def set_zones():
-    data = request.get_json()
-    save_zones(data)
-    monitor.update_zones(data)
-    return jsonify({"success": True})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
