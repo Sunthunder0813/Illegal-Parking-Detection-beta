@@ -265,6 +265,21 @@ def single_cam_gen(cam_name, stream):
 def index():
     return render_template("index.html")
 
+@app.route('/video_feed/<cam_id>')
+def video_feed_cam(cam_id):
+    if cam_id in CAM_MAP:
+        cam_name, stream = CAM_MAP[cam_id]
+        return Response(single_cam_gen(cam_name, stream), mimetype='multipart/x-mixed-replace; boundary=frame')
+    # fallback: black frame
+    def black():
+        while True:
+            proc = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(proc, "NO CAMERA", (200, 220), 0, 1, (0, 0, 255), 2)
+            _, buf = cv2.imencode('.jpg', proc)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+            time.sleep(0.5)
+    return Response(black(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
 @app.route('/video_feed')
 def video_feed():
     cam = request.args.get("cam")
