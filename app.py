@@ -229,8 +229,8 @@ def gen():
             logger.error(f"Gen Error: {e}")
 
 def gen_single(cam, cam_name):
-    offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+    offline_placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
+    cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (120, 360), 0, 2.2, (0,0,255), 5, cv2.LINE_AA)
     while True:
         if cam.frame is not None and cam.is_online():
             frame = cam.frame.copy()
@@ -239,7 +239,7 @@ def gen_single(cam, cam_name):
                 monitor.process(cam_name, results[0], frame)
             except Exception as e:
                 logger.error(f"{cam_name} Gen Error: {e}")
-            out = cv2.resize(frame, (640, 480))
+            out = frame  # No resize, send full frame
         else:
             out = offline_placeholder
         _, buf = cv2.imencode('.jpg', out)
