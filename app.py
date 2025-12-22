@@ -132,14 +132,14 @@ class ParkingMonitor:
 
     def log_violation(self, cam, tid, label, frame):
         ts = int(time.time())
-        # Get current date and weekday
         now = datetime.datetime.now()
-        date_folder = now.strftime("<%B %d, %Y (%A)>")
-        # Create the date folder if it doesn't exist
+        date_folder = now.strftime("%B %d, %Y (%A)")
         date_dir = os.path.join(config.SAVE_DIR, date_folder)
         if not os.path.exists(date_dir):
             os.makedirs(date_dir)
-        filename = f"{cam}_{tid}_{ts}.jpg"
+        # Format time as HH_MM_ss for filename safety
+        time_str = now.strftime("%H_%M_%S")
+        filename = f"{cam}-{time_str}.jpg"
         path = os.path.join(date_dir, filename)
         cv2.imwrite(path, frame)
         logger.info(f"Violation Logged: {label} on {cam} (saved to {path})")
