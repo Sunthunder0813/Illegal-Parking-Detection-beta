@@ -150,11 +150,7 @@ class Stream:
         self.cap = cv2.VideoCapture(url)
         self.frame = None
         self.last_update = None  # Track last frame update time
-<<<<<<< HEAD
-        self.reconnecting = False  # Track reconnecting state
-=======
         self.reconnect_event = threading.Event()
->>>>>>> c5d5363edf173e6efc32e5b531c59f4549faf906
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
@@ -167,9 +163,7 @@ class Stream:
             if ret:
                 self.frame = f
                 self.last_update = time.time()
-                self.reconnecting = False
             else:
-                self.reconnecting = True
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
 
@@ -177,13 +171,8 @@ class Stream:
         """Returns True if the stream has updated recently."""
         return self.last_update is not None and (time.time() - self.last_update) < timeout
 
-<<<<<<< HEAD
-    def is_reconnecting(self):
-        return self.reconnecting
-=======
     def reconnect(self):
         self.reconnect_event.set()
->>>>>>> c5d5363edf173e6efc32e5b531c59f4549faf906
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -265,20 +254,6 @@ def update_settings():
     REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
     return jsonify({"success": True})
 
-<<<<<<< HEAD
-@app.route('/api/camera_status')
-def camera_status():
-    return jsonify({
-        "Camera_1": {
-            "online": c1.is_online(),
-            "reconnecting": c1.is_reconnecting()
-        },
-        "Camera_2": {
-            "online": c2.is_online(),
-            "reconnecting": c2.is_reconnecting()
-        }
-    })
-=======
 @app.route('/api/reconnect/<camera>', methods=['POST'])
 def reconnect_camera(camera):
     if camera == "Camera_1":
@@ -289,7 +264,6 @@ def reconnect_camera(camera):
         return jsonify({"success": True, "message": "Camera_2 reconnect triggered"})
     else:
         return jsonify({"success": False, "message": "Unknown camera"}), 400
->>>>>>> c5d5363edf173e6efc32e5b531c59f4549faf906
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
