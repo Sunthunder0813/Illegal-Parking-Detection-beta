@@ -1,111 +1,238 @@
+<!-- filepath: c:\Users\Joseph Santander\Desktop\DETECTION\Illegal-Parking-Detection-beta\templates\zone_selector.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Zone Selector</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <style>
-        body { font-family: Arial, sans-serif; }
-        #canvas { border: 2px solid #333; cursor: crosshair; }
-        #controls { margin: 10px 0; }
-        #camera-select { margin-right: 10px; }
-        #save-btn { margin-left: 10px; }
+        body { background-color: #f8f8f8; color: #222; }
+        .container { margin-top: 2rem; }
+        .video-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: flex-start;
+            gap: 2rem;
+        }
+        .camera-zone-wrapper {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            max-width: 700px;
+            min-width: 250px;
+            flex: 1 1 350px;
+        }
+        .video-frame-container {
+            position: relative;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .video-frame {
+            border-radius: 12px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+            border: 2px solid #343a40;
+            width: 100%;
+            height: auto;
+            aspect-ratio: 16/9;
+            background: #000;
+            object-fit: contain;
+            display: block;
+            max-width: 100%;
+        }
+        .zone-canvas {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+        }
+        .zone-canvas.active {
+            pointer-events: auto;
+            cursor: crosshair;
+        }
+        .camera-label {
+            color: #222;
+            font-weight: bold;
+            margin: 0.5rem 0 0.2rem 0;
+            font-size: 1.1rem;
+            text-align: center;
+        }
+        .controls-bar {
+            margin: 1rem 0 0.5rem 0;
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+        }
+        .active-config {
+            border: 2px solid #ff9800 !important;
+            box-shadow: 0 0 0 4px #ffe0b2 !important;
+        }
+        @media (max-width: 900px) {
+            .video-container { flex-direction: column; gap: 2rem; }
+            .camera-zone-wrapper { max-width: 98vw; }
+        }
+        @media (max-width: 768px) {
+            .container { padding-left: 0.5rem; padding-right: 0.5rem; }
+            .video-container { gap: 1rem; }
+        }
+        @media (max-width: 480px) {
+            .container { padding-left: 0.25rem; padding-right: 0.25rem; }
+            .video-container { gap: 0.5rem; }
+        }
     </style>
 </head>
 <body>
-    <h2>Zone Selector</h2>
-    <div id="controls">
-        <label for="camera-select">Camera:</label>
-        <select id="camera-select">
-            <option value="Camera_1">Camera 1</option>
-            <option value="Camera_2">Camera 2</option>
-        </select>
-        <button id="undo-btn">Undo</button>
-        <button id="clear-btn">Clear</button>
-        <button id="save-btn">Save &amp; Go to Main</button>
+    <div class="container">
+        <h2 class="text-center text-dark mb-4" style="font-weight: bold;">
+            <i class="bi bi-gear"></i> Configure Illegal Parking Zone
+        </h2>
+        <div class="controls-bar">
+            <label for="camera-select" class="form-label mb-0 me-2">Select Camera:</label>
+            <select id="camera-select" class="form-select form-select-sm w-auto">
+                <option value="Camera_1">Camera 1</option>
+                <option value="Camera_2">Camera 2</option>
+            </select>
+            <button id="undo-btn" class="btn btn-secondary btn-sm"><i class="bi bi-arrow-counterclockwise"></i> Undo</button>
+            <button id="clear-btn" class="btn btn-danger btn-sm"><i class="bi bi-x-circle"></i> Clear</button>
+            <button id="save-btn" class="btn btn-success btn-sm"><i class="bi bi-save"></i> Save &amp; Go to Main</button>
+        </div>
+        <div class="video-container">
+            <div class="camera-zone-wrapper" id="wrapper-cam1">
+                <span class="camera-label">CCTV 1</span>
+                <div class="video-frame-container">
+                    <img src="{{ url_for('video_feed_c1') }}" class="video-frame" id="video-cam1" alt="CCTV 1">
+                    <canvas id="canvas-cam1" class="zone-canvas"></canvas>
+                </div>
+            </div>
+            <div class="camera-zone-wrapper" id="wrapper-cam2">
+                <span class="camera-label">CCTV 2</span>
+                <div class="video-frame-container">
+                    <img src="{{ url_for('video_feed_c2') }}" class="video-frame" id="video-cam2" alt="CCTV 2">
+                    <canvas id="canvas-cam2" class="zone-canvas"></canvas>
+                </div>
+            </div>
+        </div>
+        <div id="msg" class="text-center mt-3"></div>
     </div>
-    <canvas id="canvas" width="640" height="480"></canvas>
-    <div id="msg"></div>
     <script>
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
+        // --- Setup ---
         const cameraSelect = document.getElementById('camera-select');
         const undoBtn = document.getElementById('undo-btn');
         const clearBtn = document.getElementById('clear-btn');
         const saveBtn = document.getElementById('save-btn');
         const msgDiv = document.getElementById('msg');
-        let points = [];
+        const canvases = {
+            "Camera_1": document.getElementById('canvas-cam1'),
+            "Camera_2": document.getElementById('canvas-cam2')
+        };
+        const wrappers = {
+            "Camera_1": document.getElementById('wrapper-cam1'),
+            "Camera_2": document.getElementById('wrapper-cam2')
+        };
+        const videos = {
+            "Camera_1": document.getElementById('video-cam1'),
+            "Camera_2": document.getElementById('video-cam2')
+        };
         let zones = {};
+        let points = { "Camera_1": [], "Camera_2": [] };
         let currentCamera = cameraSelect.value;
-        let img = new Image();
 
-        function fetchFrame() {
-            // Use the single camera feed for background
-            let url = currentCamera === "Camera_1" ? "/video_feed_c1" : "/video_feed_c2";
-            // Use a snapshot endpoint if available, else fallback to MJPEG
-            fetch(url + "?snapshot=1")
-                .then(resp => resp.blob())
-                .then(blob => {
-                    img.src = URL.createObjectURL(blob);
-                });
+        // --- Canvas Sizing ---
+        function resizeCanvas(cam) {
+            const video = videos[cam];
+            const canvas = canvases[cam];
+            canvas.width = video.clientWidth;
+            canvas.height = video.clientHeight;
         }
+        function resizeAllCanvases() {
+            resizeCanvas("Camera_1");
+            resizeCanvas("Camera_2");
+            draw("Camera_1");
+            draw("Camera_2");
+        }
+        window.addEventListener('resize', resizeAllCanvases);
 
-        function draw() {
+        // --- Drawing ---
+        function draw(cam) {
+            const canvas = canvases[cam];
+            const ctx = canvas.getContext('2d');
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            if (img.complete && img.naturalWidth) {
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            }
-            // Draw polygon
-            if (points.length > 0) {
+            const pts = points[cam];
+            if (pts.length > 0) {
                 ctx.beginPath();
-                ctx.moveTo(points[0][0], points[0][1]);
-                for (let i = 1; i < points.length; i++) {
-                    ctx.lineTo(points[i][0], points[i][1]);
+                ctx.moveTo(pts[0][0], pts[0][1]);
+                for (let i = 1; i < pts.length; i++) {
+                    ctx.lineTo(pts[i][0], pts[i][1]);
                 }
                 ctx.closePath();
                 ctx.strokeStyle = "#00FF00";
                 ctx.lineWidth = 2;
                 ctx.stroke();
                 // Draw points
-                for (let pt of points) {
+                for (let pt of pts) {
                     ctx.beginPath();
-                    ctx.arc(pt[0], pt[1], 5, 0, 2 * Math.PI);
+                    ctx.arc(pt[0], pt[1], 6, 0, 2 * Math.PI);
                     ctx.fillStyle = "#FF0000";
                     ctx.fill();
                 }
             }
         }
 
-        function updatePointsFromZones() {
-            points = zones[currentCamera] ? zones[currentCamera].map(pt => [...pt]) : [];
+        // --- Mouse Events ---
+        function enableCanvas(cam, enable) {
+            const canvas = canvases[cam];
+            if (enable) {
+                canvas.classList.add('active');
+            } else {
+                canvas.classList.remove('active');
+            }
         }
-
-        // Mouse events
-        canvas.addEventListener('mousedown', e => {
+        function getRelativeCoords(e, canvas) {
             const rect = canvas.getBoundingClientRect();
-            const x = Math.round(e.clientX - rect.left);
-            const y = Math.round(e.clientY - rect.top);
-            points.push([x, y]);
-            draw();
+            const x = Math.round((e.clientX - rect.left));
+            const y = Math.round((e.clientY - rect.top));
+            return [x, y];
+        }
+        Object.keys(canvases).forEach(cam => {
+            canvases[cam].addEventListener('mousedown', e => {
+                if (currentCamera !== cam) return;
+                const pt = getRelativeCoords(e, canvases[cam]);
+                points[cam].push(pt);
+                draw(cam);
+            });
         });
 
-        undoBtn.onclick = () => {
-            points.pop();
-            draw();
-        };
-        clearBtn.onclick = () => {
-            points = [];
-            draw();
-        };
+        // --- Controls ---
         cameraSelect.onchange = () => {
             currentCamera = cameraSelect.value;
-            updatePointsFromZones();
-            fetchFrame();
-            draw();
+            Object.keys(wrappers).forEach(cam => {
+                if (cam === currentCamera) {
+                    wrappers[cam].classList.add('active-config');
+                    enableCanvas(cam, true);
+                } else {
+                    wrappers[cam].classList.remove('active-config');
+                    enableCanvas(cam, false);
+                }
+            });
         };
-
+        undoBtn.onclick = () => {
+            if (points[currentCamera].length) {
+                points[currentCamera].pop();
+                draw(currentCamera);
+            }
+        };
+        clearBtn.onclick = () => {
+            points[currentCamera] = [];
+            draw(currentCamera);
+        };
         saveBtn.onclick = () => {
-            zones[currentCamera] = points.map(pt => [...pt]);
-            // Save all zones to backend
+            zones["Camera_1"] = points["Camera_1"].map(pt => [...pt]);
+            zones["Camera_2"] = points["Camera_2"].map(pt => [...pt]);
             fetch('/api/zones', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -121,18 +248,41 @@
               });
         };
 
-        // Initial load: get zones and frame
+        // --- Initial Load ---
+        function syncPointsFromZones() {
+            points["Camera_1"] = zones["Camera_1"] ? zones["Camera_1"].map(pt => [...pt]) : [];
+            points["Camera_2"] = zones["Camera_2"] ? zones["Camera_2"].map(pt => [...pt]) : [];
+        }
         fetch('/api/zones').then(resp => resp.json()).then(data => {
             zones = data;
-            updatePointsFromZones();
-            fetchFrame();
-            draw();
+            syncPointsFromZones();
+            resizeAllCanvases();
         });
 
-        img.onload = draw;
+        // --- Video/Canvas Sync ---
+        function onVideoLoaded(cam) {
+            resizeCanvas(cam);
+            draw(cam);
+        }
+        videos["Camera_1"].addEventListener('load', () => onVideoLoaded("Camera_1"));
+        videos["Camera_2"].addEventListener('load', () => onVideoLoaded("Camera_2"));
 
-        // Optionally refresh frame every few seconds
-        setInterval(fetchFrame, 2000);
+        // --- Highlight active camera for editing ---
+        function updateActiveCamera() {
+            Object.keys(wrappers).forEach(cam => {
+                if (cam === currentCamera) {
+                    wrappers[cam].classList.add('active-config');
+                    enableCanvas(cam, true);
+                } else {
+                    wrappers[cam].classList.remove('active-config');
+                    enableCanvas(cam, false);
+                }
+            });
+        }
+        updateActiveCamera();
+
+        // --- Redraw on camera change ---
+        cameraSelect.dispatchEvent(new Event('change'));
     </script>
 </body>
 </html>
