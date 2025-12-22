@@ -132,8 +132,15 @@ class ParkingMonitor:
 
     def log_violation(self, cam, tid, label, frame):
         ts = int(time.time())
+        # Get current date and weekday
+        now = datetime.datetime.now()
+        date_folder = now.strftime("<%B %d, %Y (%A)>")
+        # Create the date folder if it doesn't exist
+        date_dir = os.path.join(config.SAVE_DIR, date_folder)
+        if not os.path.exists(date_dir):
+            os.makedirs(date_dir)
         filename = f"{cam}_{tid}_{ts}.jpg"
-        path = os.path.join(config.SAVE_DIR, filename)
+        path = os.path.join(date_dir, filename)
         cv2.imwrite(path, frame)
         logger.info(f"Violation Logged: {label} on {cam} (saved to {path})")
 
@@ -143,11 +150,19 @@ class Stream:
         self.cap = cv2.VideoCapture(url)
         self.frame = None
         self.last_update = None  # Track last frame update time
+<<<<<<< HEAD
         self.reconnecting = False  # Track reconnecting state
+=======
+        self.reconnect_event = threading.Event()
+>>>>>>> c5d5363edf173e6efc32e5b531c59f4549faf906
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
+            if self.reconnect_event.is_set():
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.url)
+                self.reconnect_event.clear()
             ret, f = self.cap.read()
             if ret:
                 self.frame = f
@@ -162,8 +177,13 @@ class Stream:
         """Returns True if the stream has updated recently."""
         return self.last_update is not None and (time.time() - self.last_update) < timeout
 
+<<<<<<< HEAD
     def is_reconnecting(self):
         return self.reconnecting
+=======
+    def reconnect(self):
+        self.reconnect_event.set()
+>>>>>>> c5d5363edf173e6efc32e5b531c59f4549faf906
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -245,6 +265,7 @@ def update_settings():
     REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
     return jsonify({"success": True})
 
+<<<<<<< HEAD
 @app.route('/api/camera_status')
 def camera_status():
     return jsonify({
@@ -257,6 +278,18 @@ def camera_status():
             "reconnecting": c2.is_reconnecting()
         }
     })
+=======
+@app.route('/api/reconnect/<camera>', methods=['POST'])
+def reconnect_camera(camera):
+    if camera == "Camera_1":
+        c1.reconnect()
+        return jsonify({"success": True, "message": "Camera_1 reconnect triggered"})
+    elif camera == "Camera_2":
+        c2.reconnect()
+        return jsonify({"success": True, "message": "Camera_2 reconnect triggered"})
+    else:
+        return jsonify({"success": False, "message": "Unknown camera"}), 400
+>>>>>>> c5d5363edf173e6efc32e5b531c59f4549faf906
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
