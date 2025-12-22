@@ -151,11 +151,13 @@ class Stream:
         self.frame = None
         self.last_update = None  # Track last frame update time
         self.reconnect_event = threading.Event()
+        self.reconnecting = False  # Track reconnecting state
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
             if self.reconnect_event.is_set():
+                self.reconnecting = True
                 self.cap.release()
                 self.cap = cv2.VideoCapture(self.url)
                 self.reconnect_event.clear()
@@ -163,7 +165,9 @@ class Stream:
             if ret:
                 self.frame = f
                 self.last_update = time.time()
+                self.reconnecting = False
             else:
+                self.reconnecting = True
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
 
@@ -264,6 +268,17 @@ def reconnect_camera(camera):
         return jsonify({"success": True, "message": "Camera_2 reconnect triggered"})
     else:
         return jsonify({"success": False, "message": "Unknown camera"}), 400
+
+@app.route('/api/camera_status')
+def camera_status():
+    return jsonify({
+        "Camera_1": {
+            "reconnecting": bool(getattr(c1, "reconnecting", False))
+        },
+        "Camera_2": {
+            "reconnecting": bool(getattr(c2, "reconnecting", False))
+        }
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
