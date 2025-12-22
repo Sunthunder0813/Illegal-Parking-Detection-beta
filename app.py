@@ -151,11 +151,13 @@ class Stream:
         self.frame = None
         self.last_update = None  # Track last frame update time
         self.reconnect_event = threading.Event()
+        self.reconnecting = False  # Track reconnecting state
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
             if self.reconnect_event.is_set():
+                self.reconnecting = True
                 self.cap.release()
                 self.cap = cv2.VideoCapture(self.url)
                 self.reconnect_event.clear()
@@ -163,7 +165,9 @@ class Stream:
             if ret:
                 self.frame = f
                 self.last_update = time.time()
+                self.reconnecting = False
             else:
+                self.reconnecting = True
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
 
@@ -224,13 +228,40 @@ def gen():
         except Exception as e:
             logger.error(f"Gen Error: {e}")
 
+def gen_single(cam, cam_name):
+    offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+    while True:
+        if cam.frame is not None and cam.is_online():
+            frame = cam.frame.copy()
+            try:
+                results = detect([frame])
+                monitor.process(cam_name, results[0], frame)
+            except Exception as e:
+                logger.error(f"{cam_name} Gen Error: {e}")
+            out = cv2.resize(frame, (640, 480))
+        else:
+            out = offline_placeholder
+        _, buf = cv2.imencode('.jpg', out)
+        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+        time.sleep(0.03)
+
 @app.route('/')
 def index():
     return render_template("index.html")
 
 @app.route('/video_feed')
 def video_feed():
+    # (Optional: keep for backward compatibility, or remove if not needed)
     return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video_feed_c1')
+def video_feed_c1():
+    return Response(gen_single(c1, "Camera_1"), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video_feed_c2')
+def video_feed_c2():
+    return Response(gen_single(c2, "Camera_2"), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/settings.html')
 def settings_page():
@@ -264,6 +295,17 @@ def reconnect_camera(camera):
         return jsonify({"success": True, "message": "Camera_2 reconnect triggered"})
     else:
         return jsonify({"success": False, "message": "Unknown camera"}), 400
+
+@app.route('/api/camera_status')
+def camera_status():
+    return jsonify({
+        "Camera_1": {
+            "reconnecting": bool(getattr(c1, "reconnecting", False))
+        },
+        "Camera_2": {
+            "reconnecting": bool(getattr(c2, "reconnecting", False))
+        }
+    })
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)

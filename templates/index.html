@@ -24,7 +24,8 @@
             box-shadow: 0 4px 24px rgba(0,0,0,0.5);
             border: 2px solid #343a40;
             max-width: 100vw;
-            width: 2560px;
+            width: 1280px;
+            height: 720px;
             background: #000;
         }
         .sidebar-toggle {
@@ -33,6 +34,53 @@
             top: 1.2rem;
             z-index: 1051;
             padding: 0.5rem 0.75rem;
+        }
+        .reconnecting-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            background: rgba(30,30,30,0.45);
+            backdrop-filter: blur(6px);
+            pointer-events: none;
+            transition: opacity 0.3s;
+            opacity: 0;
+        }
+        .reconnecting-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .reconnecting-spinner {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .reconnecting-spinner .spinner-border {
+            width: 3rem; height: 3rem;
+            color: #ff9800;
+        }
+        .reconnecting-spinner span {
+            margin-top: 1rem;
+            color: #fff;
+            font-size: 1.3rem;
+            font-weight: bold;
+            text-shadow: 0 2px 8px #000;
+            letter-spacing: 1px;
+            animation: pulse 1.2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .video-outer {
+            position: relative;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         /* Mobile Responsive Styles */
         @media (max-width: 1024px) {
@@ -139,8 +187,17 @@
             <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
         </div>
         {% endif %}
-        <div class="video-container">
-            <img src="{{ url_for('video_feed') }}" class="video-frame" alt="Live Tracking Feed">
+        <div class="video-outer">
+            <div class="video-container" id="videoContainer" style="flex-direction: row;">
+                <img src="{{ url_for('video_feed_c1') }}" class="video-frame" alt="CCTV 1 Feed" id="liveVideoC1">
+                <img src="{{ url_for('video_feed_c2') }}" class="video-frame" alt="CCTV 2 Feed" id="liveVideoC2">
+            </div>
+            <div class="reconnecting-overlay" id="reconnectingOverlay">
+                <div class="reconnecting-spinner">
+                    <div class="spinner-border" role="status"></div>
+                    <span>Reconnecting...</span>
+                </div>
+            </div>
         </div>
     </div>
     <!-- Bootstrap JS Bundle CDN (optional, for future interactivity) -->
@@ -155,6 +212,29 @@
         sidebar.addEventListener('hidden.bs.offcanvas', function () {
             toggleBtn.style.display = '';
         });
+
+        // Reconnecting animation logic
+        const overlay = document.getElementById('reconnectingOverlay');
+        let reconnecting = false;
+
+        async function checkCameraStatus() {
+            try {
+                const res = await fetch('/api/camera_status');
+                const status = await res.json();
+                // If any camera is reconnecting, show overlay
+                reconnecting = status.Camera_1.reconnecting || status.Camera_2.reconnecting;
+                overlay.classList.toggle('active', reconnecting);
+                // Optionally blur the video frames
+                document.getElementById('liveVideoC1').style.filter = status.Camera_1.reconnecting ? 'blur(6px) grayscale(0.4)' : '';
+                document.getElementById('liveVideoC2').style.filter = status.Camera_2.reconnecting ? 'blur(6px) grayscale(0.4)' : '';
+            } catch (e) {
+                // On error, show overlay as fallback
+                overlay.classList.add('active');
+                document.getElementById('liveVideoC1').style.filter = 'blur(6px) grayscale(0.4)';
+                document.getElementById('liveVideoC2').style.filter = 'blur(6px) grayscale(0.4)';
+            }
+        }
+        setInterval(checkCameraStatus, 1200);
     </script>
 </body>
 </html>
