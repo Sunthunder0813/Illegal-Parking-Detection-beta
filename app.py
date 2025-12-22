@@ -179,11 +179,13 @@ class Stream:
         self.frame = None
         self.last_update = None  # Track last frame update time
         self.reconnect_event = threading.Event()
+        self.reconnecting = False  # Track reconnecting state
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
             if self.reconnect_event.is_set():
+                self.reconnecting = True
                 self.cap.release()
                 self.cap = cv2.VideoCapture(self.url)
                 self.reconnect_event.clear()
@@ -191,18 +193,15 @@ class Stream:
             if ret:
                 self.frame = f
                 self.last_update = time.time()
+                self.reconnecting = False
             else:
+                self.reconnecting = True
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
 
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
         return self.last_update is not None and (time.time() - self.last_update) < timeout
-
-    @property
-    def reconnecting(self):
-        # True if not online, False if online
-        return not self.is_online()
 
     def reconnect(self):
         self.reconnect_event.set()
@@ -346,10 +345,10 @@ def reconnect_camera(camera):
 def camera_status():
     return jsonify({
         "Camera_1": {
-            "reconnecting": c1.reconnecting
+            "reconnecting": bool(getattr(c1, "reconnecting", False))
         },
         "Camera_2": {
-            "reconnecting": c2.reconnecting
+            "reconnecting": bool(getattr(c2, "reconnecting", False))
         }
     })
 
@@ -363,19 +362,6 @@ def set_zones():
     save_zones(data)
     monitor.update_zones(data)
     return jsonify({"success": True})
-
-@app.route('/snapshot/<camera>')
-def snapshot(camera):
-    with latest_frames_lock:
-        frame = latest_frames.get(camera)
-        if frame is not None:
-            _, buf = cv2.imencode('.jpg', frame)
-            return Response(buf.tobytes(), mimetype='image/jpeg')
-        else:
-            offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
-            _, buf = cv2.imencode('.jpg', offline_placeholder)
-            return Response(buf.tobytes(), mimetype='image/jpeg')
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
