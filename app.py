@@ -164,14 +164,26 @@ class Stream:
         self.url = url
         self.cap = cv2.VideoCapture(url)
         self.frame = None
+        self.connected = False
+        self.last_error = None
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         while True:
-            ret, f = self.cap.read()
-            if ret:
-                self.frame = f
-            else:
+            try:
+                ret, f = self.cap.read()
+                if ret:
+                    self.frame = f
+                    self.connected = True
+                    self.last_error = None
+                else:
+                    self.connected = False
+                    self.last_error = "Camera disconnected or stream error"
+                    time.sleep(2)
+                    self.cap = cv2.VideoCapture(self.url)
+            except Exception as e:
+                self.connected = False
+                self.last_error = str(e)
                 time.sleep(2)
                 self.cap = cv2.VideoCapture(self.url)
 
@@ -232,6 +244,20 @@ def update_settings():
     VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
     REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
     return jsonify({"success": True})
+
+@app.route('/api/video_status')
+def video_status():
+    status = {
+        "Camera_1": {
+            "connected": c1.connected,
+            "error": c1.last_error
+        },
+        "Camera_2": {
+            "connected": c2.connected,
+            "error": c2.last_error
+        }
+    }
+    return jsonify(status)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
