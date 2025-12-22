@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import json
 
 # Camera RTSP URLs
 CAM1_URL = "rtsp://192.168.18.2:554/stream"
@@ -71,11 +72,9 @@ def main():
     cv2.destroyAllWindows()
 
     if points:
-        arr_str = f'{zone_var_name} = np.array([{", ".join(f"[{x}, {y}]" for x, y in points)}], np.int32)'
-        print("\nZone coordinates for your config:")
-        print(arr_str)
+        print(json.dumps(points))  # Print only the coordinates as JSON array
     else:
-        print("No points selected.")
+        print("[]")
 
 if __name__ == "__main__":
     main()

@@ -10,6 +10,7 @@ from app_detect import detect
 import config
 import datetime
 import queue
+import subprocess
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -338,6 +339,31 @@ def camera_status():
             "reconnecting": bool(getattr(c2, "reconnecting", False))
         }
     })
+
+@app.route('/api/zone_selector', methods=['POST'])
+def api_zone_selector():
+    try:
+        # Run zone_selector.py and capture output
+        proc = subprocess.Popen(
+            ["python", "zone_selector.py"],
+            cwd=os.path.dirname(__file__),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        stdout, stderr = proc.communicate()
+        # Parse output for zone coordinates (expects a line with JSON array)
+        import re, json as pyjson
+        match = re.search(r"\[\s*\[.*?\]\s*\]", stdout, re.DOTALL)
+        if match:
+            zone = pyjson.loads(match.group(0))
+            # Update config and return new zone
+            update_config_py({"PARKING_ZONES": {"Camera_1": zone}})
+            return jsonify({"success": True, "zone": zone})
+        else:
+            return jsonify({"success": False, "error": "No zone found", "stdout": stdout, "stderr": stderr})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)

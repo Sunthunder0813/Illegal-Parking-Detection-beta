@@ -26,12 +26,10 @@
                     </div>
 
                     <div class="mb-3">
-                        <label for="zone_area" class="form-label">Red Zone Area (JSON Array for Camera 1)</label>
-                        <textarea class="form-control" id="zone_area" name="zone_area" rows="3" required></textarea>
-                        <small class="text-muted">
-                            Format: <code>[[x1, y1], [x2, y2], ...]</code><br>
-                            Example: <code>[[249,242],[255,404],[654,426],[443,261]]</code>
-                        </small>
+                        <button type="button" class="btn btn-outline-primary" id="selectZoneBtn">
+                            <i class="bi bi-vector-pen"></i> Select Zone Area
+                        </button>
+                        <div id="zoneDisplay" class="mt-2"></div>
                     </div>
                     
                     <button type="submit" class="btn btn-primary">Save Settings</button>
@@ -44,43 +42,39 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Load current settings on page load
+        function updateZoneDisplay(zone) {
+            document.getElementById('zoneDisplay').innerHTML = zone
+                ? `<span class="badge bg-info text-dark">Selected Zone: ${JSON.stringify(zone)}</span>`
+                : `<span class="badge bg-secondary">No zone selected</span>`;
+        }
+
         function loadSettings() {
             fetch('/api/settings')
                 .then(r => r.json())
                 .then(data => {
                     document.getElementById('violation_time').value = data.VIOLATION_TIME_THRESHOLD;
                     document.getElementById('repeat_capture').value = data.REPEAT_CAPTURE_INTERVAL;
-                    // Load zone area for Camera_1
+                    // Display zone area for Camera_1
                     if (data.PARKING_ZONES && data.PARKING_ZONES.Camera_1) {
-                        document.getElementById('zone_area').value = JSON.stringify(data.PARKING_ZONES.Camera_1);
+                        updateZoneDisplay(data.PARKING_ZONES.Camera_1);
+                    } else {
+                        updateZoneDisplay(null);
                     }
                 });
         }
 
         document.addEventListener('DOMContentLoaded', loadSettings);
 
-        // Save settings on form submit (AJAX)
         document.getElementById('settingsForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const status = document.getElementById('status');
-            let zoneArea;
-            try {
-                zoneArea = JSON.parse(document.getElementById('zone_area').value);
-                if (!Array.isArray(zoneArea) || zoneArea.length < 3) throw new Error();
-            } catch {
-                status.innerHTML = '<div class="alert alert-danger">Invalid zone area format.</div>';
-                return;
-            }
-            const data = {
-                VIOLATION_TIME_THRESHOLD: parseInt(document.getElementById('violation_time').value),
-                REPEAT_CAPTURE_INTERVAL: parseInt(document.getElementById('repeat_capture').value),
-                PARKING_ZONES: { Camera_1: zoneArea }
-            };
             fetch('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
+                body: JSON.stringify({
+                    VIOLATION_TIME_THRESHOLD: parseInt(document.getElementById('violation_time').value),
+                    REPEAT_CAPTURE_INTERVAL: parseInt(document.getElementById('repeat_capture').value)
+                })
             })
             .then(r => r.json())
             .then(result => {
@@ -97,6 +91,30 @@
             .catch(err => {
                 status.innerHTML = '<div class="alert alert-danger">Error saving settings</div>';
             });
+        });
+
+        document.getElementById('selectZoneBtn').addEventListener('click', function() {
+            const status = document.getElementById('status');
+            status.innerHTML = '<div class="alert alert-info">Launching zone selector... Please complete selection in the popup window.</div>';
+            fetch('/api/zone_selector', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success && data.zone) {
+                        updateZoneDisplay(data.zone);
+                        status.innerHTML = '<div class="alert alert-success">Zone area updated from selector!</div>';
+                        // Save zone to config
+                        fetch('/api/settings', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ PARKING_ZONES: { Camera_1: data.zone } })
+                        }).then(() => setTimeout(loadSettings, 500));
+                    } else {
+                        status.innerHTML = '<div class="alert alert-danger">Zone selection failed.</div>';
+                    }
+                })
+                .catch(() => {
+                    status.innerHTML = '<div class="alert alert-danger">Zone selector error.</div>';
+                });
         });
     </script>
 </body>
