@@ -16,13 +16,15 @@
             align-items: center;
             min-height: 60vh;
             overflow-x: auto;
+            width: 100%;
+            box-sizing: border-box;
         }
         .video-frame {
             border-radius: 12px;
             box-shadow: 0 4px 24px rgba(0,0,0,0.5);
             border: 2px solid #343a40;
-            max-width: 100vw; /* Increased from 90vw to 98vw */
-            width: 2560px;   /* Increased from 1500px to 1920px for larger feeds */
+            max-width: 100vw;
+            width: 2560px;
             background: #000;
         }
         .sidebar-toggle {
@@ -30,38 +32,23 @@
             left: 1rem;
             top: 1.2rem;
             z-index: 1051;
+            padding: 0.5rem 0.75rem;
         }
         /* Mobile Responsive Styles */
         @media (max-width: 1024px) {
             .video-container {
                 min-height: 50vh;
                 overflow-x: auto;
+                padding: 0.5rem;
             }
         }
         @media (max-width: 768px) {
+            .container {
+                padding-left: 0.5rem;
+                padding-right: 0.5rem;
+            }
             .video-container {
                 min-height: 40vh;
-                flex-direction: column;
-                padding: 1rem;
-            }
-            .video-frame {
-                width: 100% !important;
-                max-width: 100% !important;
-                height: auto !important;
-                display: block;
-                margin: 0 auto;
-            }
-            h1 {
-                font-size: 1.5rem !important;
-            }
-            .sidebar-toggle {
-                left: 0.5rem;
-                top: 0.8rem;
-            }
-        }
-        @media (max-width: 480px) {
-            .video-container {
-                min-height: 30vh;
                 flex-direction: column;
                 padding: 0.5rem;
             }
@@ -73,10 +60,45 @@
                 margin: 0 auto;
             }
             h1 {
-                font-size: 1.2rem !important;
+                font-size: 1.3rem !important;
+                margin-top: 1rem !important;
+                margin-bottom: 1rem !important;
+            }
+            .sidebar-toggle {
+                left: 0.5rem;
+                top: 0.8rem;
+                padding: 0.4rem 0.6rem;
+            }
+        }
+        @media (max-width: 480px) {
+            .container {
+                padding-left: 0.25rem;
+                padding-right: 0.25rem;
+            }
+            .video-container {
+                min-height: 20vh;
+                flex-direction: column;
+                padding: 0.25rem;
+            }
+            .video-frame {
+                width: 100% !important;
+                max-width: 100% !important;
+                height: auto !important;
+                display: block;
+                margin: 0 auto;
+            }
+            h1 {
+                font-size: 1rem !important;
+                margin-top: 0.5rem !important;
+                margin-bottom: 0.5rem !important;
+            }
+            .sidebar-toggle {
+                left: 0.25rem;
+                top: 0.5rem;
+                padding: 0.3rem 0.5rem;
             }
             .sidebar-toggle i {
-                font-size: 1.2rem !important;
+                font-size: 1rem !important;
             }
         }
     </style>
