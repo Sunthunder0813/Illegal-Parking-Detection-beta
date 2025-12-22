@@ -6,7 +6,7 @@ import numpy as np
 import logging
 import firebase_admin
 from firebase_admin import credentials, db
-from flask import Flask, Response, render_template, jsonify, request
+from flask import Flask, Response, render_template, jsonify, request  # add jsonify, request
 import json
 from app_detect import detect
 import config
@@ -16,20 +16,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ParkingApp")
 if not os.path.exists(config.SAVE_DIR):
     os.makedirs(config.SAVE_DIR)
-
-# --- Global Log Storage ---
-event_logs = []
-
-def add_log(camera_name, message, status):
-    """Stores camera events with a timestamp."""
-    log_entry = {
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "camera": camera_name,
-        "message": message,
-        "status": status  # 'online' or 'offline'
-    }
-    event_logs.insert(0, log_entry) # Newest first
-    if len(event_logs) > 50: event_logs.pop() # Buffer limit
 
 # --- Firebase ---
 try:
@@ -42,11 +28,31 @@ except Exception as e:
     ref = None
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
-SETTINGS_PATH = "settings.json"
 
 # Settings management
+SETTINGS_PATH = "settings.json"
+
+# Default settings
 VIOLATION_TIME_THRESHOLD = getattr(config, "VIOLATION_TIME_THRESHOLD", 10)
 REPEAT_CAPTURE_INTERVAL = getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
+current_settings = {
+    "VIOLATION_TIME_THRESHOLD": VIOLATION_TIME_THRESHOLD,
+    "REPEAT_CAPTURE_INTERVAL": REPEAT_CAPTURE_INTERVAL
+}
+
+def load_settings():
+    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
+    if os.path.exists(SETTINGS_PATH):
+        with open(SETTINGS_PATH, "r") as f:
+            current_settings = json.load(f)
+            VIOLATION_TIME_THRESHOLD = current_settings.get("VIOLATION_TIME_THRESHOLD", VIOLATION_TIME_THRESHOLD)
+            REPEAT_CAPTURE_INTERVAL = current_settings.get("REPEAT_CAPTURE_INTERVAL", REPEAT_CAPTURE_INTERVAL)
+
+def save_settings(data):
+    with open(SETTINGS_PATH, "w") as f:
+        json.dump(data, f)
+
+load_settings()
 
 class ByteTrackLite:
     def __init__(self):
@@ -92,6 +98,7 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
+        # Define parking zones for each camera
         self.zones = {
             "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
             "Camera_2": np.array([[46, 437], [453, 253], [664, 259], [678, 438]])
@@ -100,6 +107,7 @@ class ParkingMonitor:
     def process(self, name, res, frame):
         fh, fw = frame.shape[:2]
         cv2.polylines(frame, [self.zones[name]], True, (0, 255, 0), 2)
+        
         pixel_boxes = [[b[0]*fw, b[1]*fh, b[2]*fw, b[3]*fh] for b in res.xyxy]
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
         now = time.time()
@@ -109,14 +117,17 @@ class ParkingMonitor:
             label = CLASS_NAMES.get(d['cls'], "OBJ")
             center = ((x1+x2)//2, (y1+y2)//2)
 
+            # Person detection (Yellow box, no timer)
             if d['cls'] == 0:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
                 continue
 
+            # Vehicle in Zone logic
             if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
                 self.timers.setdefault((name, tid), now)
                 dur = int(now - self.timers[(name, tid)])
-                is_violation = dur >= VIOLATION_TIME_THRESHOLD
+                
+                is_violation = dur >= config.VIOLATION_TIME_THRESHOLD
                 color = (0, 0, 255) if is_violation else (0, 255, 255)
                 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
@@ -124,7 +135,7 @@ class ParkingMonitor:
 
                 if is_violation:
                     last_up = self.last_upload_time.get((name, tid), 0)
-                    if now - last_up > REPEAT_CAPTURE_INTERVAL:
+                    if now - last_up > config.REPEAT_CAPTURE_INTERVAL:
                         self.log_violation(name, tid, label, frame)
                         self.last_upload_time[(name, tid)] = now
             else:
@@ -137,181 +148,90 @@ class ParkingMonitor:
         cv2.imwrite(path, frame)
         if ref:
             try:
-                ref.push({'camera': cam, 'object_id': tid, 'type': label, 'timestamp': ts, 'local_path': path})
-            except Exception: pass
+                ref.push({
+                    'camera': cam, 
+                    'object_id': tid, 
+                    'type': label, 
+                    'timestamp': ts, 
+                    'local_path': path
+                })
+                logger.info(f"Violation Logged: {label} on {cam}")
+            except Exception as e:
+                logger.error(f"Firebase Push Error: {e}")
 
 class Stream:
-    def __init__(self, url, name):
+    def __init__(self, url):
         self.url = url
-        self.name = name
-        self.cap = None
+        self.cap = cv2.VideoCapture(url)
         self.frame = None
-        self.connected = False
-        self.running = True
-        self.retry_count = 0
-        self.last_frame_time = None
-        self.status_message = "Initializing..."
-        self.stabilization_period = 3  # seconds
-        self.valid_frame_count = 0
-        self.frames_needed_for_stable = 5
-        self.is_stabilizing = True
         threading.Thread(target=self._run, daemon=True).start()
 
-    def _try_connect(self, max_retries=3, retry_delay=0.3):
-        self.retry_count = 0
-        while self.running and self.retry_count < max_retries:
-            self.retry_count += 1
-            if self.cap:
-                try:
-                    self.cap.release()
-                except:
-                    pass
-            self.cap = cv2.VideoCapture(self.url)
-            if self.cap.isOpened():
-                ret = self.cap.grab()
-                if ret:
-                    ret, _ = self.cap.retrieve()
-                    if ret:
-                        self.connected = True
-                        self.valid_frame_count = 0
-                        self.is_stabilizing = True
-                        self.last_frame_time = time.time()
-                        self.status_message = "Stabilizing..."
-                        return True
-            self.connected = False
-            self.status_message = f"Connecting... ({self.retry_count}/{max_retries})"
-            time.sleep(retry_delay)
-        self.status_message = "Offline - Retrying..."
-        return False
-
     def _run(self):
-        while self.running:
-            if not self.connected:
-                if not self._try_connect():
-                    time.sleep(1)
-                    continue
-
-            try:
-                if self.cap and self.cap.grab():
-                    ret, f = self.cap.retrieve()
-                    if ret:
-                        self.frame = f
-                        now = time.time()
-                        self.last_frame_time = now
-                        if self.is_stabilizing:
-                            self.valid_frame_count += 1
-                            if self.valid_frame_count >= self.frames_needed_for_stable:
-                                self.is_stabilizing = False
-                                self.status_message = "Connected"
-                                add_log(self.name, "Stream Restored", "online")
-                        else:
-                            self.status_message = "Connected"
-                        self.connected = True
-                    else:
-                        self._handle_read_failure()
-                else:
-                    self._handle_read_failure()
-            except Exception:
-                self._handle_read_failure()
-            # Timeout logic: if no frame for 3s, reconnect
-            if self.connected and self.last_frame_time:
-                if time.time() - self.last_frame_time > 3:
-                    self.status_message = "Reconnecting..."
-                    self.connected = False
-                    if self.cap:
-                        try:
-                            self.cap.release()
-                        except:
-                            pass
-                        self.cap = None
-                    add_log(self.name, "No record received - Disconnected", "offline")
-            time.sleep(0.03)
-
-    def _handle_read_failure(self):
-        self.connected = False
-        self.status_message = "Reconnecting..."
-        if self.cap:
-            try:
-                self.cap.release()
-            except:
-                pass
-            self.cap = None
-        time.sleep(0.3)
+        while True:
+            ret, f = self.cap.read()
+            if ret:
+                self.frame = f
+            else:
+                time.sleep(2)
+                self.cap = cv2.VideoCapture(self.url)
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
-c1, c2 = Stream(config.CAM1_URL, "Camera_1"), Stream(config.CAM2_URL, "Camera_2")
-CAM_MAP = {"1": ("Camera_1", c1), "2": ("Camera_2", c2)}
+c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 
-def single_cam_gen(cam_name, stream):
+def gen():
     while True:
-        if stream.connected and stream.frame is not None:
-            frame = stream.frame.copy()
-            try:
-                # Run detection and overlay for this camera only
-                results = detect([frame])
-                monitor.process(cam_name, results[0], frame)
-            except Exception:
-                pass
-            proc = cv2.resize(frame, (640, 480))
-        else:
-            proc = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(proc, f"{cam_name} OFFLINE", (160, 220), 0, 1, (0, 0, 255), 2)
-        _, buf = cv2.imencode('.jpg', proc)
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-        time.sleep(0.03)
+        active = []
+        if c1.frame is not None: active.append(("Camera_1", c1.frame.copy()))
+        if c2.frame is not None: active.append(("Camera_2", c2.frame.copy()))
+        
+        if not active:
+            time.sleep(0.01)
+            continue
+
+        try:
+            results = detect([f for _, f in active])
+            out = []
+            for i, res in enumerate(results):
+                name, frame = active[i]
+                monitor.process(name, res, frame)
+                out.append(cv2.resize(frame, (640, 480)))
+
+            combined = cv2.hconcat(out) if len(out) == 2 else out[0]
+            _, buf = cv2.imencode('.jpg', combined)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
+        except Exception as e:
+            logger.error(f"Gen Error: {e}")
 
 @app.route('/')
 def index():
     return render_template("index.html")
 
-@app.route('/video_feed/<cam_id>')
-def video_feed_cam(cam_id):
-    if cam_id in CAM_MAP:
-        cam_name, stream = CAM_MAP[cam_id]
-        return Response(single_cam_gen(cam_name, stream), mimetype='multipart/x-mixed-replace; boundary=frame')
-    # fallback: black frame
-    def black():
-        while True:
-            proc = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(proc, "NO CAMERA", (200, 220), 0, 1, (0, 0, 255), 2)
-            _, buf = cv2.imencode('.jpg', proc)
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.5)
-    return Response(black(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
 @app.route('/video_feed')
 def video_feed():
-    cam = request.args.get("cam")
-    if cam in CAM_MAP:
-        cam_name, stream = CAM_MAP[cam]
-        return Response(single_cam_gen(cam_name, stream), mimetype='multipart/x-mixed-replace; boundary=frame')
-    # fallback: black frame
-    def black():
-        while True:
-            proc = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(proc, "NO CAMERA", (200, 220), 0, 1, (0, 0, 255), 2)
-            _, buf = cv2.imencode('.jpg', proc)
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
-            time.sleep(0.5)
-    return Response(black(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/api/video_status')
-def video_status():
-    return jsonify({
-        "Camera_1": {
-            "connected": c1.connected,
-            "status_message": getattr(c1, "status_message", "Unknown")
-        },
-        "Camera_2": {
-            "connected": c2.connected,
-            "status_message": getattr(c2, "status_message", "Unknown")
-        }
-    })
+@app.route('/settings.html')
+def settings_page():
+    return render_template('settings.html')
 
-@app.route('/api/logs')
-def get_logs():
-    return jsonify(event_logs)
+@app.route('/violations.html')
+def violations_page():
+    return render_template('violations.html')
+
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    return jsonify(current_settings)
+
+@app.route('/api/settings', methods=['POST'])
+def update_settings():
+    global current_settings, VIOLATION_TIME_THRESHOLD, REPEAT_CAPTURE_INTERVAL
+    data = request.get_json()
+    current_settings = data
+    save_settings(data)
+    VIOLATION_TIME_THRESHOLD = data["VIOLATION_TIME_THRESHOLD"]
+    REPEAT_CAPTURE_INTERVAL = data["REPEAT_CAPTURE_INTERVAL"]
+    return jsonify({"success": True})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
