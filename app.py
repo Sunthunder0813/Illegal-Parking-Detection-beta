@@ -23,11 +23,13 @@ CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 def get_current_settings():
     return {
         "VIOLATION_TIME_THRESHOLD": getattr(config, "VIOLATION_TIME_THRESHOLD", 10),
-        "REPEAT_CAPTURE_INTERVAL": getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
+        "REPEAT_CAPTURE_INTERVAL": getattr(config, "REPEAT_CAPTURE_INTERVAL", 60),
+        "PARKING_ZONES": getattr(config, "PARKING_ZONES", {})
     }
 
 def update_config_py(new_settings):
     import re
+    import json as pyjson
     config_path = os.path.join(os.path.dirname(__file__), "config.py")
     with open(config_path, "r") as f:
         lines = f.readlines()
@@ -35,12 +37,25 @@ def update_config_py(new_settings):
         pattern = re.compile(rf"^{key}\s*=\s*.*$")
         for i, line in enumerate(lines):
             if pattern.match(line):
-                lines[i] = f"{key} = {value}\n"
+                if key == "PARKING_ZONES":
+                    lines[i] = f"{key} = {pyjson.dumps(value)}\n"
+                else:
+                    lines[i] = f"{key} = {value}\n"
                 return
         # If not found, append
-        lines.append(f"{key} = {value}\n")
+        if key == "PARKING_ZONES":
+            lines.append(f"{key} = {pyjson.dumps(value)}\n")
+        else:
+            lines.append(f"{key} = {value}\n")
     replace_line("VIOLATION_TIME_THRESHOLD", new_settings["VIOLATION_TIME_THRESHOLD"])
     replace_line("REPEAT_CAPTURE_INTERVAL", new_settings["REPEAT_CAPTURE_INTERVAL"])
+    # Only update PARKING_ZONES if present in new_settings
+    if "PARKING_ZONES" in new_settings:
+        # Merge with existing zones to preserve Camera_2 if not provided
+        current_zones = getattr(config, "PARKING_ZONES", {})
+        updated_zones = current_zones.copy()
+        updated_zones.update(new_settings["PARKING_ZONES"])
+        replace_line("PARKING_ZONES", updated_zones)
     with open(config_path, "w") as f:
         f.writelines(lines)
     # Reload config module

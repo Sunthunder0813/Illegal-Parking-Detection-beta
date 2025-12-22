@@ -24,6 +24,15 @@
                         <input type="number" class="form-control" id="repeat_capture" name="repeat_capture" min="1" required>
                         <small class="text-muted">Cooldown between logging the same vehicle</small>
                     </div>
+
+                    <div class="mb-3">
+                        <label for="zone_area" class="form-label">Red Zone Area (JSON Array for Camera 1)</label>
+                        <textarea class="form-control" id="zone_area" name="zone_area" rows="3" required></textarea>
+                        <small class="text-muted">
+                            Format: <code>[[x1, y1], [x2, y2], ...]</code><br>
+                            Example: <code>[[249,242],[255,404],[654,426],[443,261]]</code>
+                        </small>
+                    </div>
                     
                     <button type="submit" class="btn btn-primary">Save Settings</button>
                     <a href="/" class="btn btn-secondary">Back to Home</a>
@@ -42,6 +51,10 @@
                 .then(data => {
                     document.getElementById('violation_time').value = data.VIOLATION_TIME_THRESHOLD;
                     document.getElementById('repeat_capture').value = data.REPEAT_CAPTURE_INTERVAL;
+                    // Load zone area for Camera_1
+                    if (data.PARKING_ZONES && data.PARKING_ZONES.Camera_1) {
+                        document.getElementById('zone_area').value = JSON.stringify(data.PARKING_ZONES.Camera_1);
+                    }
                 });
         }
 
@@ -50,9 +63,19 @@
         // Save settings on form submit (AJAX)
         document.getElementById('settingsForm').addEventListener('submit', function(e) {
             e.preventDefault();
+            const status = document.getElementById('status');
+            let zoneArea;
+            try {
+                zoneArea = JSON.parse(document.getElementById('zone_area').value);
+                if (!Array.isArray(zoneArea) || zoneArea.length < 3) throw new Error();
+            } catch {
+                status.innerHTML = '<div class="alert alert-danger">Invalid zone area format.</div>';
+                return;
+            }
             const data = {
                 VIOLATION_TIME_THRESHOLD: parseInt(document.getElementById('violation_time').value),
-                REPEAT_CAPTURE_INTERVAL: parseInt(document.getElementById('repeat_capture').value)
+                REPEAT_CAPTURE_INTERVAL: parseInt(document.getElementById('repeat_capture').value),
+                PARKING_ZONES: { Camera_1: zoneArea }
             };
             fetch('/api/settings', {
                 method: 'POST',
@@ -61,10 +84,8 @@
             })
             .then(r => r.json())
             .then(result => {
-                const status = document.getElementById('status');
                 if (result.success) {
                     status.innerHTML = '<div class="alert alert-success">Settings saved successfully!</div>';
-                    // Reload settings from server to reflect any changes
                     setTimeout(() => {
                         loadSettings();
                         status.innerHTML = '';
@@ -74,7 +95,6 @@
                 }
             })
             .catch(err => {
-                const status = document.getElementById('status');
                 status.innerHTML = '<div class="alert alert-danger">Error saving settings</div>';
             });
         });
