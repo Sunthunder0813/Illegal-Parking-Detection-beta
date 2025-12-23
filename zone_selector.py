@@ -4,7 +4,7 @@ import json
 
 # Camera RTSP URLs
 CAM1_URL = "rtsp://192.168.18.2:554/stream"
-CAM2_URL = "rtsp://192.168.18.113:554/stream"
+CAM2_URL = "rtsp://192.168.18.199:554/stream"
 
 window_name = "Zone Selector"
 points = []
