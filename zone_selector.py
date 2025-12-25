@@ -81,37 +81,53 @@ def main():
 
         # --- Save to config.py ---
         import os
-        config_path = os.path.join(os.path.dirname(__file__), "config.py")
         import re
+        import ast
+        config_path = os.path.join(os.path.dirname(__file__), "config.py")
 
         # Read config.py
         with open(config_path, "r") as f:
             lines = f.readlines()
 
-        # Find and update PARKING_ZONES
-        import json as pyjson
-        # Find PARKING_ZONES dict in config.py
+        # Find and update PARKING_ZONES robustly
         zones = {}
-        for line in lines:
+        start_idx = None
+        for i, line in enumerate(lines):
             if line.strip().startswith("PARKING_ZONES"):
-                try:
-                    zones = eval(line.split("=",1)[1].strip(), {}, {})
-                except Exception:
-                    zones = {}
+                start_idx = i
                 break
+
+        if start_idx is not None:
+            # Collect all lines of the dict
+            dict_lines = []
+            for line in lines[start_idx:]:
+                dict_lines.append(line)
+                if "}" in line:
+                    break
+            dict_str = "".join(dict_lines)
+            try:
+                zones = ast.literal_eval(dict_str.split("=",1)[1].strip())
+            except Exception:
+                zones = {}
+        else:
+            zones = {}
+
         # Update the selected camera
         cam_key = "Camera_1" if zone_var_name == "ZONE_CAM1" else "Camera_2"
         zones[cam_key] = points
 
         # Replace or append PARKING_ZONES in config.py
-        found = False
-        for i, line in enumerate(lines):
-            if line.strip().startswith("PARKING_ZONES"):
-                lines[i] = f'PARKING_ZONES = {pyjson.dumps(zones)}\n'
-                found = True
-                break
-        if not found:
-            lines.append(f'PARKING_ZONES = {pyjson.dumps(zones)}\n')
+        new_zones_str = f'PARKING_ZONES = {json.dumps(zones)}\n'
+        if start_idx is not None:
+            # Remove old PARKING_ZONES block
+            end_idx = start_idx
+            for i in range(start_idx, len(lines)):
+                if "}" in lines[i]:
+                    end_idx = i
+                    break
+            lines = lines[:start_idx] + [new_zones_str] + lines[end_idx+1:]
+        else:
+            lines.append(new_zones_str)
 
         # Write back to config.py
         with open(config_path, "w") as f:
