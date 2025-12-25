@@ -2,10 +2,12 @@ import numpy as np
 import cv2
 import threading
 import logging
-from hailo_platform import HEF, VDevice, InferVStreams, ConfigureParams, InputVStreamParams, OutputVStreamParams, HailoStreamInterface
 import config
 
 logger = logging.getLogger("ParkingApp")
+
+if getattr(config, "USE_HAILO", True):
+    from hailo_platform import HEF, VDevice, InferVStreams, ConfigureParams, InputVStreamParams, OutputVStreamParams, HailoStreamInterface
 
 class DetectionResult:
     def __init__(self, xyxy, confs, clss):
@@ -74,9 +76,20 @@ class HailoDetector:
                         results.append(self.postprocess(raw_out))
         return results
 
+def mock_detect(frames):
+    # Return empty detections for web mode
+    class MockResult:
+        def __init__(self):
+            self.xyxy = np.array([])
+            self.conf = np.array([])
+            self.cls = np.array([])
+    return [MockResult() for _ in frames]
+
 _detector = None
 def detect(frames):
     global _detector
+    if not getattr(config, "USE_HAILO", True):
+        return mock_detect(frames)
     if _detector is None:
         _detector = HailoDetector(config.MODEL_PATH)
     return _detector.run_detection(frames)

@@ -307,7 +307,8 @@ def gen_single(cam, cam_name):
 
 @app.route('/')
 def index():
-    return render_template("index.html")
+    detection_enabled = getattr(config, "USE_HAILO", True)
+    return render_template("index.html", detection_enabled=detection_enabled)
 
 @app.route('/video_feed')
 def video_feed():
