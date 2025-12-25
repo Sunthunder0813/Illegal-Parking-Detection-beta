@@ -343,9 +343,12 @@ def camera_status():
 @app.route('/api/zone_selector', methods=['POST'])
 def api_zone_selector():
     try:
+        data = request.get_json(force=True)
+        camera = data.get("camera", "Camera_1")
+        cam_arg = "1" if camera == "Camera_1" else "2"
         # Run zone_selector.py and capture output
         proc = subprocess.Popen(
-            ["python", "zone_selector.py"],
+            ["python", "zone_selector.py", cam_arg],
             cwd=os.path.dirname(__file__),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -358,7 +361,7 @@ def api_zone_selector():
         if match:
             zone = pyjson.loads(match.group(0))
             # Update config and return new zone
-            update_config_py({"PARKING_ZONES": {"Camera_1": zone}})
+            update_config_py({"PARKING_ZONES": {camera: zone}})
             return jsonify({"success": True, "zone": zone})
         else:
             return jsonify({"success": False, "error": "No zone found", "stdout": stdout, "stderr": stderr})

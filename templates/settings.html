@@ -26,7 +26,12 @@
                     </div>
 
                     <div class="mb-3">
-                        <button type="button" class="btn btn-outline-primary" id="selectZoneBtn">
+                        <label for="cameraSelect" class="form-label">Select Camera for Zone Configuration</label>
+                        <select class="form-select" id="cameraSelect" name="cameraSelect">
+                            <option value="Camera_1">Camera 1</option>
+                            <option value="Camera_2">Camera 2</option>
+                        </select>
+                        <button type="button" class="btn btn-outline-primary mt-2" id="selectZoneBtn">
                             <i class="bi bi-vector-pen"></i> Select Zone Area
                         </button>
                         <div id="zoneDisplay" class="mt-2"></div>
@@ -54,9 +59,10 @@
                 .then(data => {
                     document.getElementById('violation_time').value = data.VIOLATION_TIME_THRESHOLD;
                     document.getElementById('repeat_capture').value = data.REPEAT_CAPTURE_INTERVAL;
-                    // Display zone area for Camera_1
-                    if (data.PARKING_ZONES && data.PARKING_ZONES.Camera_1) {
-                        updateZoneDisplay(data.PARKING_ZONES.Camera_1);
+                    // Display zone area for selected camera
+                    const cam = document.getElementById('cameraSelect').value;
+                    if (data.PARKING_ZONES && data.PARKING_ZONES[cam]) {
+                        updateZoneDisplay(data.PARKING_ZONES[cam]);
                     } else {
                         updateZoneDisplay(null);
                     }
@@ -64,6 +70,8 @@
         }
 
         document.addEventListener('DOMContentLoaded', loadSettings);
+
+        document.getElementById('cameraSelect').addEventListener('change', loadSettings);
 
         document.getElementById('settingsForm').addEventListener('submit', function(e) {
             e.preventDefault();
@@ -95,8 +103,13 @@
 
         document.getElementById('selectZoneBtn').addEventListener('click', function() {
             const status = document.getElementById('status');
+            const cam = document.getElementById('cameraSelect').value;
             status.innerHTML = '<div class="alert alert-info">Launching zone selector... Please complete selection in the popup window.</div>';
-            fetch('/api/zone_selector', { method: 'POST' })
+            fetch('/api/zone_selector', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ camera: cam })
+            })
                 .then(r => r.json())
                 .then(data => {
                     if (data.success && data.zone) {
@@ -106,7 +119,7 @@
                         fetch('/api/settings', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ PARKING_ZONES: { Camera_1: data.zone } })
+                            body: JSON.stringify({ PARKING_ZONES: { [cam]: data.zone } })
                         }).then(() => setTimeout(loadSettings, 500));
                     } else {
                         status.innerHTML = '<div class="alert alert-danger">Zone selection failed.</div>';

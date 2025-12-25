@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import json
+import sys
 
 # Camera RTSP URLs
 CAM1_URL = "rtsp://192.168.18.2:554/stream"
@@ -18,10 +19,14 @@ def mouse_callback(event, x, y, flags, param):
 
 def main():
     global points, zone_var_name
-    print("Select camera to use for zone selection:")
-    print("1 - Camera 1")
-    print("2 - Camera 2")
-    cam_choice = input("Enter 1 or 2: ").strip()
+    # Accept camera selection from command line argument
+    if len(sys.argv) > 1:
+        cam_choice = sys.argv[1]
+    else:
+        print("Select camera to use for zone selection:")
+        print("1 - Camera 1")
+        print("2 - Camera 2")
+        cam_choice = input("Enter 1 or 2: ").strip()
     if cam_choice == "1":
         cam_url = CAM1_URL
         zone_var_name = "ZONE_CAM1"
