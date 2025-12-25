@@ -58,6 +58,9 @@ class HailoDetector:
                     all_confs.append(score)
                     all_clss.append(class_id)
 
+        # Now, all monitored classes are detected regardless of zone.
+        # No filtering by illegal parking zone here; that logic should be handled elsewhere.
+
         return DetectionResult(np.array(all_boxes), np.array(all_confs), np.array(all_clss))
 
     def run_detection(self, frames):
