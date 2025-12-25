@@ -192,7 +192,9 @@ class Stream:
         self.reconnecting = False  # Track reconnecting state
         self.read_lock = threading.Lock()
         self.running = True
+        self.frame_buffer = None  # Buffer for latest raw frame
         threading.Thread(target=self._run, daemon=True).start()
+        threading.Thread(target=self._grabber, daemon=True).start()  # New thread for continuous grabbing
 
     def _run(self):
         # Try to read frames as fast as possible for higher FPS
@@ -213,6 +215,15 @@ class Stream:
                 time.sleep(0.2)  # Shorter sleep for faster reconnect attempts
                 self.cap = cv2.VideoCapture(self.url)
 
+    def _grabber(self):
+        # Continuously grab frames for smooth display
+        while self.running:
+            ret, f = self.cap.read()
+            if ret:
+                with self.read_lock:
+                    self.frame_buffer = f
+            time.sleep(0.01)  # ~100 FPS grab rate
+
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
         with self.read_lock:
@@ -223,7 +234,13 @@ class Stream:
 
     def get_frame(self):
         with self.read_lock:
-            return None if self.frame is None else self.frame.copy()
+            # Return latest processed frame if available, else raw frame from buffer
+            if self.frame is not None:
+                return self.frame.copy()
+            elif self.frame_buffer is not None:
+                return self.frame_buffer.copy()
+            else:
+                return None
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -272,22 +289,26 @@ def gen():
         with latest_frames_lock:
             frame1 = latest_frames.get("Camera_1")
             frame2 = latest_frames.get("Camera_2")
-            out = []
-            if frame1 is not None:
-                out.append(frame1)
-            if frame2 is not None:
-                out.append(frame2)
-            if not out:
-                # fallback placeholder
-                offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
-                out = [offline_placeholder, offline_placeholder]
-            elif len(out) == 1:
-                offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
-                out.append(offline_placeholder)
-            combined = cv2.hconcat(out)
-            _, buf = cv2.imencode('.jpg', combined)
+        # Always show latest available frame from buffer if overlay is None
+        if frame1 is None and c1.frame_buffer is not None:
+            frame1 = cv2.resize(c1.frame_buffer, (640, 480))
+        if frame2 is None and c2.frame_buffer is not None:
+            frame2 = cv2.resize(c2.frame_buffer, (640, 480))
+        out = []
+        if frame1 is not None:
+            out.append(frame1)
+        if frame2 is not None:
+            out.append(frame2)
+        if not out:
+            offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+            out = [offline_placeholder, offline_placeholder]
+        elif len(out) == 1:
+            offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+            out.append(offline_placeholder)
+        combined = cv2.hconcat(out)
+        _, buf = cv2.imencode('.jpg', combined)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         time.sleep(0.03)
 
@@ -297,11 +318,14 @@ def gen_single(cam, cam_name):
     while True:
         with latest_frames_lock:
             frame = latest_frames.get(cam_name)
-            if frame is not None:
-                out = cv2.resize(frame, (1280, 720))
-            else:
-                out = offline_placeholder
-            _, buf = cv2.imencode('.jpg', out)
+        # Always show latest available frame from buffer if overlay is None
+        if frame is None and cam.frame_buffer is not None:
+            frame = cv2.resize(cam.frame_buffer, (1280, 720))
+        if frame is not None:
+            out = frame
+        else:
+            out = offline_placeholder
+        _, buf = cv2.imencode('.jpg', out)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         time.sleep(0.03)
 
