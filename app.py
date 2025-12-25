@@ -9,7 +9,6 @@ import json
 from app_detect import detect
 import config
 import datetime
-import queue
 import subprocess
 import importlib
 
@@ -21,7 +20,7 @@ if not os.path.exists(config.SAVE_DIR):
 
 CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 
-# --- Settings management (Restored Full Logic) ---
+# --- Settings management ---
 def get_current_settings():
     return {
         "VIOLATION_TIME_THRESHOLD": getattr(config, "VIOLATION_TIME_THRESHOLD", 10),
@@ -44,11 +43,8 @@ def update_config_py(new_settings):
                 else:
                     lines[i] = f"{key} = {value}\n"
                 return
-        if key == "PARKING_ZONES":
-            lines.append(f"{key} = {pyjson.dumps(value)}\n")
-        else:
-            lines.append(f"{key} = {value}\n")
-            
+        lines.append(f"{key} = {pyjson.dumps(value) if key == 'PARKING_ZONES' else value}\n")
+    
     replace_line("VIOLATION_TIME_THRESHOLD", new_settings.get("VIOLATION_TIME_THRESHOLD", getattr(config, "VIOLATION_TIME_THRESHOLD", 10)))
     replace_line("REPEAT_CAPTURE_INTERVAL", new_settings.get("REPEAT_CAPTURE_INTERVAL", getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)))
     
@@ -148,7 +144,6 @@ class ParkingMonitor:
                         self.last_upload_time[(name, tid)] = now
             else:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                cv2.putText(frame, f"{label} #{tid}", (x1, y1-8), 0, 0.6, (255, 0, 0), 2)
                 self.timers.pop((name, tid), None)
 
     def log_violation(self, cam, tid, label, frame):
@@ -158,20 +153,18 @@ class ParkingMonitor:
         if not os.path.exists(date_dir): os.makedirs(date_dir)
         path = os.path.join(date_dir, f"{cam}-{now.strftime('%H_%M_%S')}.jpg")
         cv2.imwrite(path, frame)
-        logger.info(f"Violation Logged: {label} on {cam} (saved to {path})")
 
-# --- Thread-Safe Stream Class ---
+# --- Thread-Safe Stream ---
 class Stream:
     def __init__(self, url):
         self.url = url
         self.cap = cv2.VideoCapture(url)
         self.frame_buffer = None
         self.last_update = 0
-        self.reconnect_event = threading.Event()
         self.reconnecting = False
         self.read_lock = threading.Lock()
+        self.reconnect_event = threading.Event()
         self.running = True
-        # ONLY ONE thread handles the cap object to prevent async_lock crash
         threading.Thread(target=self._io_thread, daemon=True).start()
 
     def _io_thread(self):
@@ -180,7 +173,6 @@ class Stream:
                 self.cap.release()
                 self.cap = cv2.VideoCapture(self.url)
                 self.reconnect_event.clear()
-            
             ret, f = self.cap.read()
             if ret:
                 with self.read_lock:
@@ -189,12 +181,12 @@ class Stream:
                 self.reconnecting = False
             else:
                 self.reconnecting = True
-                time.sleep(0.5)
+                time.sleep(1)
                 self.cap.release()
                 self.cap = cv2.VideoCapture(self.url)
 
-    def is_online(self, timeout=2.0):
-        return (time.time() - self.last_update) < timeout
+    def is_online(self):
+        return (time.time() - self.last_update) < 3.0
 
     def get_frame(self):
         with self.read_lock:
@@ -203,14 +195,12 @@ class Stream:
     def reconnect(self):
         self.reconnect_event.set()
 
-# --- Main App Logic ---
+# --- Initialization ---
 app = Flask(__name__)
 monitor = ParkingMonitor()
 c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
-
 latest_processed = {"Camera_1": None, "Camera_2": None}
 proc_lock = threading.Lock()
-DETECTION_INTERVAL = 0.1
 
 def processing_worker(cam_name, stream):
     while True:
@@ -222,35 +212,48 @@ def processing_worker(cam_name, stream):
                 monitor.process(cam_name, res[0], frame_disp)
                 with proc_lock:
                     latest_processed[cam_name] = frame_disp
-        time.sleep(DETECTION_INTERVAL)
+        time.sleep(0.1)
 
 threading.Thread(target=processing_worker, args=("Camera_1", c1), daemon=True).start()
 threading.Thread(target=processing_worker, args=("Camera_2", c2), daemon=True).start()
 
-# --- Routes (Restored Full Logic) ---
+# --- Page Routes (RESTORED) ---
+@app.route('/')
+def index():
+    return render_template("index.html")
+
+@app.route('/settings.html')
+def settings_page():
+    return render_template('settings.html')
+
+@app.route('/violations.html')
+def violations_page():
+    return render_template('violations.html')
+
+# --- Video Feed Routes ---
 def gen_single(stream, cam_name):
-    offline_placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
-    cv2.putText(offline_placeholder, f"{cam_name} OFFLINE", (400, 360), 0, 1.5, (0,0,255), 3)
     while True:
         with proc_lock:
             frame = latest_processed.get(cam_name)
-        if frame is None:
-            frame = stream.get_frame()
-        
-        display_frame = cv2.resize(frame, (1280, 720)) if frame is not None else offline_placeholder
-        _, buf = cv2.imencode('.jpg', display_frame)
+        if frame is None: frame = stream.get_frame()
+        if frame is not None:
+            frame = cv2.resize(frame, (1280, 720))
+        else:
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            cv2.putText(frame, f"{cam_name} OFFLINE", (400, 360), 0, 1.5, (0,0,255), 3)
+        _, buf = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buf.tobytes() + b'\r\n')
         time.sleep(0.03)
 
-@app.route('/')
-def index(): return render_template("index.html")
-
 @app.route('/video_feed_c1')
-def video_feed_c1(): return Response(gen_single(c1, "Camera_1"), mimetype='multipart/x-mixed-replace; boundary=frame')
+def video_feed_c1():
+    return Response(gen_single(c1, "Camera_1"), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/video_feed_c2')
-def video_feed_c2(): return Response(gen_single(c2, "Camera_2"), mimetype='multipart/x-mixed-replace; boundary=frame')
+def video_feed_c2():
+    return Response(gen_single(c2, "Camera_2"), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+# --- API Routes ---
 @app.route('/api/settings', methods=['GET', 'POST'])
 def api_settings():
     if request.method == 'POST':
@@ -286,7 +289,7 @@ def api_zone_selector():
             zone = pyjson.loads(match.group(0))
             update_config_py({"PARKING_ZONES": {camera: zone}})
             return jsonify({"success": True, "zone": zone})
-        return jsonify({"success": False, "error": "No zone found", "stdout": stdout})
+        return jsonify({"success": False, "error": "No zone found"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
