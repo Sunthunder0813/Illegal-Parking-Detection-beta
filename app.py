@@ -1,14 +1,10 @@
-# NOTE: This script is intended to run on the Raspberry Pi.
-# The web interface and detection logic both run on the Pi.
-# If the Pi/server is offline, the web interface is also unavailable.
-
 import cv2
 import threading
 import time
 import os
 import numpy as np
 import logging
-from flask import Flask, Response, render_template, jsonify, request, redirect
+from flask import Flask, Response, render_template, jsonify, request
 import json
 from app_detect import detect
 import config
@@ -16,8 +12,6 @@ import datetime
 import queue
 import subprocess
 import importlib
-import requests
-from flask import Response, stream_with_context
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -72,14 +66,6 @@ def update_config_py(new_settings):
         f.writelines(lines)
     # Reload config module
     importlib.reload(config)
-
-def update_public_server_ip(ip):
-    # Example: Update a pastebin or gist with your server IP
-    # Replace this with your actual update logic
-    try:
-        requests.post("https://your-public-endpoint.example.com/update", json={"ip": ip})
-    except Exception as e:
-        logger.warning(f"Could not update public server IP: {e}")
 
 class ByteTrackLite:
     def __init__(self):
@@ -199,18 +185,14 @@ class ParkingMonitor:
 class Stream:
     def __init__(self, url):
         self.url = url
-        self.cap = None
+        self.cap = cv2.VideoCapture(url)
         self.frame = None
-        self.last_update = None
+        self.last_update = None  # Track last frame update time
         self.reconnect_event = threading.Event()
-        self.reconnecting = False
+        self.reconnecting = False  # Track reconnecting state
         self.read_lock = threading.Lock()
         self.running = True
-        if getattr(config, "USE_HAILO", True):
-            self.cap = cv2.VideoCapture(url)
-            threading.Thread(target=self._run, daemon=True).start()
-        else:
-            threading.Thread(target=self._mock_run, daemon=True).start()
+        threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         # Try to read frames as fast as possible for higher FPS
@@ -230,16 +212,6 @@ class Stream:
                 self.reconnecting = True
                 time.sleep(0.2)  # Shorter sleep for faster reconnect attempts
                 self.cap = cv2.VideoCapture(self.url)
-
-    def _mock_run(self):
-        # Generate a dummy frame every second
-        while self.running:
-            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(dummy, "MOCK CAMERA FRAME", (60, 240), 0, 1.2, (0,255,0), 3, cv2.LINE_AA)
-            with self.read_lock:
-                self.frame = dummy
-                self.last_update = time.time()
-            time.sleep(1)
 
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
@@ -335,8 +307,7 @@ def gen_single(cam, cam_name):
 
 @app.route('/')
 def index():
-    detection_enabled = getattr(config, "USE_HAILO", True)
-    return render_template("index.html", detection_enabled=detection_enabled)
+    return render_template("index.html")
 
 @app.route('/video_feed')
 def video_feed():
@@ -419,49 +390,5 @@ def api_zone_selector():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
-@app.route('/api/server_status')
-def server_status():
-    # Always returns online if this server is running
-    return jsonify({"online": True})
-
-@app.route('/api/server_ip')
-def server_ip():
-    return jsonify({"server_ip": getattr(config, "SERVER_IP", "127.0.0.1")})
-
-@app.route('/open_link')
-def open_link():
-    # Redirect to the correct Railway production URL
-    return redirect("https://illegal-parking-detection-beta-production.up.railway.app/", code=302)
-
-@app.route('/proxy/<path:path>', methods=['GET', 'POST'])
-def proxy(path):
-    """Reverse proxy to forward requests from Railway to the Pi server."""
-    pi_ip = getattr(config, "SERVER_IP", "127.0.0.1")
-    # Use https for ngrok domains, http otherwise
-    if ".ngrok" in pi_ip:
-        pi_url = f"https://{pi_ip}/{path}"
-    else:
-        pi_url = f"http://{pi_ip}:5000/{path}"
-    method = request.method
-
-    try:
-        if method == 'GET':
-            # Stream video endpoints efficiently
-            if path.startswith("video_feed"):
-                r = requests.get(pi_url, stream=True, timeout=10)
-                return Response(stream_with_context(r.iter_content(chunk_size=4096)),
-                                content_type=r.headers.get('Content-Type', 'multipart/x-mixed-replace; boundary=frame'))
-            else:
-                r = requests.get(pi_url, params=request.args, timeout=10)
-                return (r.content, r.status_code, r.headers.items())
-        elif method == 'POST':
-            r = requests.post(pi_url, data=request.get_data(), headers=request.headers, timeout=10)
-            return (r.content, r.status_code, r.headers.items())
-        else:
-            return "Method Not Allowed", 405
-    except Exception as e:
-        return f"Proxy error: {e}", 502
-
 if __name__ == "__main__":
-    # update_public_server_ip(getattr(config, "SERVER_IP", "127.0.0.1"))  # Commented out to avoid warning
     app.run(host='0.0.0.0', port=5000, threaded=True)
