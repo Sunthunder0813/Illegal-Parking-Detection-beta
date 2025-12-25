@@ -303,6 +303,24 @@
             }
         }
         setInterval(checkCameraStatus, 1200);
+
+        // Add this function to reload the video feeds (force refresh)
+        function reloadVideoFeeds() {
+            const liveVideoC1 = document.getElementById('liveVideoC1');
+            const liveVideoC2 = document.getElementById('liveVideoC2');
+            // Add a timestamp to force reload
+            liveVideoC1.src = "{{ url_for('video_feed_c1') }}" + "?t=" + Date.now();
+            liveVideoC2.src = "{{ url_for('video_feed_c2') }}" + "?t=" + Date.now();
+        }
+
+        // Listen for zone changes via localStorage event (from settings.html)
+        window.addEventListener('storage', function(e) {
+            if (e.key === 'zoneChanged' && e.newValue === '1') {
+                reloadVideoFeeds();
+                // Reset the flag
+                localStorage.setItem('zoneChanged', '0');
+            }
+        });
     </script>
 </body>
 </html>

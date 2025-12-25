@@ -124,6 +124,8 @@
                     if (data.success && data.zone) {
                         updateZoneDisplay(data.zone);
                         status.innerHTML = '<div class="alert alert-success">Zone area updated from selector! Click "Save Settings" to apply.</div>';
+                        // Notify other tabs/pages (like index.html) to reload video feeds
+                        localStorage.setItem('zoneChanged', '1');
                     } else {
                         status.innerHTML = '<div class="alert alert-danger">Zone selection failed.</div>';
                     }
