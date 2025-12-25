@@ -3,3 +3,5 @@ hostname -I
 ifconfig
 
 ip addr
+
+http://192.168.18.32:5000/
