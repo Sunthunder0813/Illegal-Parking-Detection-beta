@@ -8,7 +8,7 @@ import time
 import os
 import numpy as np
 import logging
-from flask import Flask, Response, render_template, jsonify, request
+from flask import Flask, Response, render_template, jsonify, request, redirect
 import json
 from app_detect import detect
 import config
@@ -417,6 +417,11 @@ def server_status():
 @app.route('/api/server_ip')
 def server_ip():
     return jsonify({"server_ip": getattr(config, "SERVER_IP", "127.0.0.1")})
+
+@app.route('/open_link')
+def open_link():
+    # Redirect to the Railway internal URL
+    return redirect("illegal-parking-detection-beta-production.up.railway.app", code=302)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
