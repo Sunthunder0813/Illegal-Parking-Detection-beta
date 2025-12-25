@@ -78,6 +78,44 @@ def main():
 
     if points:
         print(json.dumps(points))  # Print only the coordinates as JSON array
+
+        # --- Save to config.py ---
+        import os
+        config_path = os.path.join(os.path.dirname(__file__), "config.py")
+        import re
+
+        # Read config.py
+        with open(config_path, "r") as f:
+            lines = f.readlines()
+
+        # Find and update PARKING_ZONES
+        import json as pyjson
+        # Find PARKING_ZONES dict in config.py
+        zones = {}
+        for line in lines:
+            if line.strip().startswith("PARKING_ZONES"):
+                try:
+                    zones = eval(line.split("=",1)[1].strip(), {}, {})
+                except Exception:
+                    zones = {}
+                break
+        # Update the selected camera
+        cam_key = "Camera_1" if zone_var_name == "ZONE_CAM1" else "Camera_2"
+        zones[cam_key] = points
+
+        # Replace or append PARKING_ZONES in config.py
+        found = False
+        for i, line in enumerate(lines):
+            if line.strip().startswith("PARKING_ZONES"):
+                lines[i] = f'PARKING_ZONES = {pyjson.dumps(zones)}\n'
+                found = True
+                break
+        if not found:
+            lines.append(f'PARKING_ZONES = {pyjson.dumps(zones)}\n')
+
+        # Write back to config.py
+        with open(config_path, "w") as f:
+            f.writelines(lines)
     else:
         print("[]")
 
