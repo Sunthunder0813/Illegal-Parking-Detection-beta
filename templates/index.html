@@ -301,9 +301,10 @@
             }
         }
 
+        // All requests now go through the Railway proxy endpoint
         function setVideoFeedSources() {
-            document.getElementById('liveVideoC1').src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c1`;
-            document.getElementById('liveVideoC2').src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c2`;
+            document.getElementById('liveVideoC1').src = `/proxy/video_feed_c1`;
+            document.getElementById('liveVideoC2').src = `/proxy/video_feed_c2`;
         }
 
         function showServerStatus(online) {
@@ -317,7 +318,7 @@
 
         async function pollServerStatus() {
             try {
-                const res = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/api/server_status`);
+                const res = await fetch(`/proxy/api/server_status`);
                 const status = await res.json();
                 serverOnline = status.online;
                 showServerStatus(serverOnline);
@@ -341,9 +342,9 @@
         }
 
         async function checkCameraStatus() {
-            if (!SERVER_IP || !serverOnline) return;
+            if (!serverOnline) return;
             try {
-                const res = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/api/camera_status`);
+                const res = await fetch(`/proxy/api/camera_status`);
                 const status = await res.json();
 
                 if (prevC1 !== status.Camera_1.reconnecting) {
@@ -383,7 +384,8 @@
         });
 
         // Initialize on page load
-        fetchServerIP();
+        setVideoFeedSources();
+        startServerStatusPolling();
     </script>
 </body>
 </html>
