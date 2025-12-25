@@ -437,7 +437,11 @@ def open_link():
 def proxy(path):
     """Reverse proxy to forward requests from Railway to the Pi server."""
     pi_ip = getattr(config, "SERVER_IP", "127.0.0.1")
-    pi_url = f"http://{pi_ip}:5000/{path}"
+    # Use https for ngrok domains, http otherwise
+    if ".ngrok" in pi_ip:
+        pi_url = f"https://{pi_ip}/{path}"
+    else:
+        pi_url = f"http://{pi_ip}:5000/{path}"
     method = request.method
 
     try:
