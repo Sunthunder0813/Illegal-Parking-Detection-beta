@@ -1,16 +1,11 @@
-# NOTE: This script is intended to run on the Raspberry Pi.
-# The web interface and detection logic both run on the Pi.
-# If the Pi/server is offline, the web interface is also unavailable.
-
 import cv2
 import threading
 import time
 import os
 import numpy as np
 import logging
-from flask import Flask, Response, render_template, jsonify, request, redirect
+from flask import Flask, Response, render_template, jsonify, request
 import json
-from app_detect import detect
 import config
 import datetime
 import queue
@@ -189,18 +184,14 @@ class ParkingMonitor:
 class Stream:
     def __init__(self, url):
         self.url = url
-        self.cap = None
+        self.cap = cv2.VideoCapture(url)
         self.frame = None
-        self.last_update = None
+        self.last_update = None  # Track last frame update time
         self.reconnect_event = threading.Event()
-        self.reconnecting = False
+        self.reconnecting = False  # Track reconnecting state
         self.read_lock = threading.Lock()
         self.running = True
-        if getattr(config, "USE_HAILO", True):
-            self.cap = cv2.VideoCapture(url)
-            threading.Thread(target=self._run, daemon=True).start()
-        else:
-            threading.Thread(target=self._mock_run, daemon=True).start()
+        threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         # Try to read frames as fast as possible for higher FPS
@@ -220,16 +211,6 @@ class Stream:
                 self.reconnecting = True
                 time.sleep(0.2)  # Shorter sleep for faster reconnect attempts
                 self.cap = cv2.VideoCapture(self.url)
-
-    def _mock_run(self):
-        # Generate a dummy frame every second
-        while self.running:
-            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(dummy, "MOCK CAMERA FRAME", (60, 240), 0, 1.2, (0,255,0), 3, cv2.LINE_AA)
-            with self.read_lock:
-                self.frame = dummy
-                self.last_update = time.time()
-            time.sleep(1)
 
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
@@ -254,6 +235,48 @@ latest_detection_results = {"Camera_1": None, "Camera_2": None}
 latest_detection_lock = threading.Lock()
 
 DETECTION_INTERVAL = 0.1  # seconds between detections (increase for less CPU, decrease for more FPS)
+
+# Dynamically import the correct detect function based on config.HAILO
+if getattr(config, "HAILO", False):
+    from app_detect import detect
+else:
+    from ultralytics import YOLO
+    class DetectionResult:
+        def __init__(self, xyxy, confs, clss):
+            self.xyxy = xyxy
+            self.conf = confs
+            self.cls = clss
+    class YOLODetector:
+        def __init__(self, model_path):
+            self.model = YOLO(model_path)
+            self.monitored_classes = [0, 2, 3, 5, 7]
+        def postprocess(self, results, frame_shape):
+            all_boxes, all_confs, all_clss = [], [], []
+            h, w = frame_shape[:2]
+            for r in results:
+                for box, conf, cls in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy(), r.boxes.cls.cpu().numpy()):
+                    cls = int(cls)
+                    if cls not in self.monitored_classes:
+                        continue
+                    if conf < config.DETECTION_THRESHOLD:
+                        continue
+                    xmin, ymin, xmax, ymax = box
+                    all_boxes.append([xmin/w, ymin/h, xmax/w, ymax/h])
+                    all_confs.append(conf)
+                    all_clss.append(cls)
+            return DetectionResult(np.array(all_boxes), np.array(all_confs), np.array(all_clss))
+        def run_detection(self, frames):
+            results = []
+            for frame in frames:
+                yolo_results = self.model.predict(frame, verbose=False)
+                results.append(self.postprocess(yolo_results, frame.shape))
+            return results
+    _detector = None
+    def detect(frames):
+        global _detector
+        if _detector is None:
+            _detector = YOLODetector(config.MODEL_PATH)
+        return _detector.run_detection(frames)
 
 def detection_worker(cam_name, stream):
     while True:
@@ -325,8 +348,7 @@ def gen_single(cam, cam_name):
 
 @app.route('/')
 def index():
-    detection_enabled = getattr(config, "USE_HAILO", True)
-    return render_template("index.html", detection_enabled=detection_enabled)
+    return render_template("index.html")
 
 @app.route('/video_feed')
 def video_feed():
@@ -408,20 +430,6 @@ def api_zone_selector():
             return jsonify({"success": False, "error": "No zone found", "stdout": stdout, "stderr": stderr})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
-
-@app.route('/api/server_status')
-def server_status():
-    # Always returns online if this server is running
-    return jsonify({"online": True})
-
-@app.route('/api/server_ip')
-def server_ip():
-    return jsonify({"server_ip": getattr(config, "SERVER_IP", "127.0.0.1")})
-
-@app.route('/open_link')
-def open_link():
-    # Redirect to the Railway internal URL
-    return redirect("illegal-parking-detection-beta-production.up.railway.app", code=302)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)

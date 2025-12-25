@@ -8,6 +8,7 @@ logger = logging.getLogger("ParkingApp")
 
 if getattr(config, "HAILO", False):
     # Only import Hailo platform if HAILO is True
+    # (Moved import inside the block to avoid import error)
     from hailo_platform import HEF, VDevice, InferVStreams, ConfigureParams, InputVStreamParams, OutputVStreamParams, HailoStreamInterface
 
     class DetectionResult:
