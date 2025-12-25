@@ -232,7 +232,7 @@
                 <div class="camera-frame-wrapper">
                     <span class="camera-label">CCTV 1</span>
                     <div class="video-frame-container">
-                        <img src="{{ url_for('video_feed_c1') }}" class="video-frame" alt="CCTV 1 Feed" id="liveVideoC1">
+                        <img src="" class="video-frame" alt="CCTV 1 Feed" id="liveVideoC1">
                         <div class="reconnecting-overlay" id="reconnectingOverlayC1">
                             <div class="reconnecting-spinner">
                                 <div class="spinner-border" role="status"></div>
@@ -244,7 +244,7 @@
                 <div class="camera-frame-wrapper">
                     <span class="camera-label">CCTV 2</span>
                     <div class="video-frame-container">
-                        <img src="{{ url_for('video_feed_c2') }}" class="video-frame" alt="CCTV 2 Feed" id="liveVideoC2">
+                        <img src="" class="video-frame" alt="CCTV 2 Feed" id="liveVideoC2">
                         <div class="reconnecting-overlay" id="reconnectingOverlayC2">
                             <div class="reconnecting-spinner">
                                 <div class="spinner-border" role="status"></div>
@@ -278,9 +278,33 @@
         // Track previous reconnecting state to avoid unnecessary class toggling (prevents flicker)
         let prevC1 = null, prevC2 = null;
 
-        async function checkCameraStatus() {
+        let SERVER_IP = null;
+        let SERVER_PORT = 5000;
+
+        async function fetchServerIP() {
             try {
-                const res = await fetch('/api/camera_status');
+                const res = await fetch('/api/server_ip');
+                const data = await res.json();
+                SERVER_IP = data.server_ip;
+                setVideoFeedSources();
+                setInterval(checkCameraStatus, 1200);
+            } catch (e) {
+                // fallback to localhost if fetch fails
+                SERVER_IP = "127.0.0.1";
+                setVideoFeedSources();
+                setInterval(checkCameraStatus, 1200);
+            }
+        }
+
+        function setVideoFeedSources() {
+            document.getElementById('liveVideoC1').src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c1`;
+            document.getElementById('liveVideoC2').src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c2`;
+        }
+
+        async function checkCameraStatus() {
+            if (!SERVER_IP) return;
+            try {
+                const res = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/api/camera_status`);
                 const status = await res.json();
 
                 if (prevC1 !== status.Camera_1.reconnecting) {
@@ -294,7 +318,6 @@
                     prevC2 = status.Camera_2.reconnecting;
                 }
             } catch (e) {
-                // On error, show overlays for both as fallback
                 overlayC1.classList.add('active');
                 overlayC2.classList.add('active');
                 liveVideoC1.style.filter = 'blur(6px) grayscale(0.4)';
@@ -306,11 +329,9 @@
 
         // Add this function to reload the video feeds (force refresh)
         function reloadVideoFeeds() {
-            const liveVideoC1 = document.getElementById('liveVideoC1');
-            const liveVideoC2 = document.getElementById('liveVideoC2');
-            // Add a timestamp to force reload
-            liveVideoC1.src = "{{ url_for('video_feed_c1') }}" + "?t=" + Date.now();
-            liveVideoC2.src = "{{ url_for('video_feed_c2') }}" + "?t=" + Date.now();
+            if (!SERVER_IP) return;
+            liveVideoC1.src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c1?t=` + Date.now();
+            liveVideoC2.src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c2?t=` + Date.now();
         }
 
         // Listen for zone changes via localStorage event (from settings.html)
@@ -321,6 +342,9 @@
                 localStorage.setItem('zoneChanged', '0');
             }
         });
+
+        // Initialize on page load
+        fetchServerIP();
     </script>
 </body>
 </html>

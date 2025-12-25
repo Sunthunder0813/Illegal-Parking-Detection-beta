@@ -409,5 +409,14 @@ def api_zone_selector():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
+@app.route('/api/server_status')
+def server_status():
+    # Always returns online if this server is running
+    return jsonify({"online": True})
+
+@app.route('/api/server_ip')
+def server_ip():
+    return jsonify({"server_ip": getattr(config, "SERVER_IP", "127.0.0.1")})
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)

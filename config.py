@@ -18,3 +18,6 @@ PARKING_ZONES = {
 }
 
 USE_HAILO = True  # Set to True for Raspberry Pi/Hailo, False for Railway/web
+
+# Global variable for server IP (used by frontend or API clients)
+SERVER_IP = "192.168.18.32"  # Change this to your Raspberry Pi's IP address
