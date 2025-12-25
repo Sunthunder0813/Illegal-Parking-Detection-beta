@@ -16,6 +16,7 @@ import datetime
 import queue
 import subprocess
 import importlib
+import requests
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -70,6 +71,14 @@ def update_config_py(new_settings):
         f.writelines(lines)
     # Reload config module
     importlib.reload(config)
+
+def update_public_server_ip(ip):
+    # Example: Update a pastebin or gist with your server IP
+    # Replace this with your actual update logic
+    try:
+        requests.post("https://your-public-endpoint.example.com/update", json={"ip": ip})
+    except Exception as e:
+        logger.warning(f"Could not update public server IP: {e}")
 
 class ByteTrackLite:
     def __init__(self):
@@ -420,8 +429,9 @@ def server_ip():
 
 @app.route('/open_link')
 def open_link():
-    # Redirect to the Railway internal URL
-    return redirect("illegal-parking-detection-beta-production.up.railway.app", code=302)
+    # Redirect to the correct Railway production URL
+    return redirect("https://illegal-parking-detection-beta-production.up.railway.app/", code=302)
 
 if __name__ == "__main__":
+    update_public_server_ip(getattr(config, "SERVER_IP", "127.0.0.1"))
     app.run(host='0.0.0.0', port=5000, threaded=True)

@@ -221,6 +221,9 @@
         <h1 class="text-center text-dark my-4" style="font-weight: bold;">
             Illegal Parking Detection - Live
         </h1>
+        <div id="serverStatusAlert" class="alert alert-danger text-center" style="display:none;">
+            <b>Server Offline</b>: Cannot connect to detection server.
+        </div>
         {% if notif %}
         <div class="alert alert-success alert-dismissible fade show mt-3" role="alert">
             {{ notif }}
@@ -280,6 +283,9 @@
 
         let SERVER_IP = null;
         let SERVER_PORT = 5000;
+        let serverOnline = false;
+        let serverStatusInterval = null;
+        let cameraStatusInterval = null;
 
         async function fetchServerIP() {
             try {
@@ -287,12 +293,11 @@
                 const data = await res.json();
                 SERVER_IP = data.server_ip;
                 setVideoFeedSources();
-                setInterval(checkCameraStatus, 1200);
+                startServerStatusPolling();
             } catch (e) {
-                // fallback to localhost if fetch fails
                 SERVER_IP = "127.0.0.1";
                 setVideoFeedSources();
-                setInterval(checkCameraStatus, 1200);
+                startServerStatusPolling();
             }
         }
 
@@ -301,8 +306,42 @@
             document.getElementById('liveVideoC2').src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c2`;
         }
 
+        function showServerStatus(online) {
+            const alertDiv = document.getElementById('serverStatusAlert');
+            if (online) {
+                alertDiv.style.display = 'none';
+            } else {
+                alertDiv.style.display = '';
+            }
+        }
+
+        async function pollServerStatus() {
+            try {
+                const res = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/api/server_status`);
+                const status = await res.json();
+                serverOnline = status.online;
+                showServerStatus(serverOnline);
+                if (serverOnline && !cameraStatusInterval) {
+                    cameraStatusInterval = setInterval(checkCameraStatus, 1200);
+                }
+            } catch (e) {
+                serverOnline = false;
+                showServerStatus(false);
+                if (cameraStatusInterval) {
+                    clearInterval(cameraStatusInterval);
+                    cameraStatusInterval = null;
+                }
+            }
+        }
+
+        function startServerStatusPolling() {
+            pollServerStatus();
+            if (serverStatusInterval) clearInterval(serverStatusInterval);
+            serverStatusInterval = setInterval(pollServerStatus, 3000);
+        }
+
         async function checkCameraStatus() {
-            if (!SERVER_IP) return;
+            if (!SERVER_IP || !serverOnline) return;
             try {
                 const res = await fetch(`http://${SERVER_IP}:${SERVER_PORT}/api/camera_status`);
                 const status = await res.json();
