@@ -48,14 +48,18 @@ def update_config_py(new_settings):
             lines.append(f"{key} = {pyjson.dumps(value)}\n")
         else:
             lines.append(f"{key} = {value}\n")
-    replace_line("VIOLATION_TIME_THRESHOLD", new_settings["VIOLATION_TIME_THRESHOLD"])
-    replace_line("REPEAT_CAPTURE_INTERVAL", new_settings["REPEAT_CAPTURE_INTERVAL"])
+    replace_line("VIOLATION_TIME_THRESHOLD", new_settings.get("VIOLATION_TIME_THRESHOLD", getattr(config, "VIOLATION_TIME_THRESHOLD", 10)))
+    replace_line("REPEAT_CAPTURE_INTERVAL", new_settings.get("REPEAT_CAPTURE_INTERVAL", getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)))
     # Only update PARKING_ZONES if present in new_settings
     if "PARKING_ZONES" in new_settings:
-        # Merge with existing zones to preserve Camera_2 if not provided
         current_zones = getattr(config, "PARKING_ZONES", {})
         updated_zones = current_zones.copy()
-        updated_zones.update(new_settings["PARKING_ZONES"])
+        for cam, val in new_settings["PARKING_ZONES"].items():
+            if val is None:
+                # Remove the camera zone
+                updated_zones.pop(cam, None)
+            else:
+                updated_zones[cam] = val
         replace_line("PARKING_ZONES", updated_zones)
     with open(config_path, "w") as f:
         f.writelines(lines)
