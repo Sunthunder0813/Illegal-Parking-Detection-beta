@@ -117,7 +117,7 @@ def main():
         zones[cam_key] = points
 
         # Replace or append PARKING_ZONES in config.py
-        new_zones_str = f'PARKING_ZONES = {json.dumps(zones)}\n'
+        new_zones_str = f'PARKING_ZONES = {json.dumps(zones, separators=(",", ":"))}\n'
         if start_idx is not None:
             # Remove old PARKING_ZONES block
             end_idx = start_idx
