@@ -1,25 +1,10 @@
 set-admin@raspberrypi:~/Illegal-Parking-Detection-beta $ python app.py --ipcam
-Exception in thread Thread-4 (detection_worker):
-Exception in thread Thread-3 (detection_worker):
 Traceback (most recent call last):
-  File "/usr/lib/python3.13/threading.py", line 1043, in _bootstrap_inner
-    self.run()
-    ~~~~~~~~^^
-  File "/usr/lib/python3.13/threading.py", line 994, in run
-    self._target(*self._args, **self._kwargs)
-    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/set-admin/Illegal-Parking-Detection-beta/app.py", line 245, in detection_worker
-    time.sleep(DETECTION_INTERVAL)
-               ^^^^^^^^^^^^^^^^^^
-NameError: name 'DETECTION_INTERVAL' is not defined
-Traceback (most recent call last):
-  File "/usr/lib/python3.13/threading.py", line 1043, in _bootstrap_inner
-    self.run()
-    ~~~~~~~~^^
-  File "/usr/lib/python3.13/threading.py", line 994, in run
-    self._target(*self._args, **self._kwargs)
-    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/set-admin/Illegal-Parking-Detection-beta/app.py", line 245, in detection_worker
-    time.sleep(DETECTION_INTERVAL)
-               ^^^^^^^^^^^^^^^^^^
-NameError: name 'DETECTION_INTERVAL' is not defined
+  File "/home/set-admin/Illegal-Parking-Detection-beta/app.py", line 13, in <module>
+    from app_detect import detect
+  File "/home/set-admin/Illegal-Parking-Detection-beta/app_detect.py", line 8, in <module>
+    import config
+  File "/home/set-admin/Illegal-Parking-Detection-beta/config.py", line 15
+    <<<<<<< Updated upstream
+    ^^
+SyntaxError: invalid syntax
