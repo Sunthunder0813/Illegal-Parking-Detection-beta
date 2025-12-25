@@ -79,13 +79,19 @@
         document.getElementById('settingsForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const status = document.getElementById('status');
+            const cam = document.getElementById('cameraSelect').value;
+            // Save both settings and zone if lastZone is set
+            let body = {
+                VIOLATION_TIME_THRESHOLD: parseInt(document.getElementById('violation_time').value),
+                REPEAT_CAPTURE_INTERVAL: parseInt(document.getElementById('repeat_capture').value)
+            };
+            if (lastZone && Array.isArray(lastZone) && lastZone.length > 2) {
+                body.PARKING_ZONES = { [cam]: lastZone };
+            }
             fetch('/api/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    VIOLATION_TIME_THRESHOLD: parseInt(document.getElementById('violation_time').value),
-                    REPEAT_CAPTURE_INTERVAL: parseInt(document.getElementById('repeat_capture').value)
-                })
+                body: JSON.stringify(body)
             })
             .then(r => r.json())
             .then(result => {
@@ -117,13 +123,7 @@
                 .then(data => {
                     if (data.success && data.zone) {
                         updateZoneDisplay(data.zone);
-                        status.innerHTML = '<div class="alert alert-success">Zone area updated from selector!</div>';
-                        // Save zone to config
-                        fetch('/api/settings', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ PARKING_ZONES: { [cam]: data.zone } })
-                        }).then(() => setTimeout(loadSettings, 500));
+                        status.innerHTML = '<div class="alert alert-success">Zone area updated from selector! Click "Save Settings" to apply.</div>';
                     } else {
                         status.innerHTML = '<div class="alert alert-danger">Zone selection failed.</div>';
                     }
