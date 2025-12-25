@@ -235,6 +235,8 @@ latest_frames_lock = threading.Lock()
 latest_detection_results = {"Camera_1": None, "Camera_2": None}
 latest_detection_lock = threading.Lock()
 
+DETECTION_INTERVAL = 0.2  # seconds between detection cycles
+
 def detection_worker(cam_name, stream):
     while True:
         frame = stream.get_frame()
