@@ -1,0 +1,5 @@
+hostname -I
+
+ifconfig
+
+ip addr
