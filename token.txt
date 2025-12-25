@@ -1,10 +1,1 @@
-set-admin@raspberrypi:~/Illegal-Parking-Detection-beta $ python app.py --ipcam
-Traceback (most recent call last):
-  File "/home/set-admin/Illegal-Parking-Detection-beta/app.py", line 13, in <module>
-    from app_detect import detect
-  File "/home/set-admin/Illegal-Parking-Detection-beta/app_detect.py", line 8, in <module>
-    import config
-  File "/home/set-admin/Illegal-Parking-Detection-beta/config.py", line 15
-    <<<<<<< Updated upstream
-    ^^
-SyntaxError: invalid syntax
+ngrok http 5000
