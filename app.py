@@ -6,7 +6,6 @@ import numpy as np
 import logging
 from flask import Flask, Response, render_template, jsonify, request
 import json
-from app_detect import detect
 import config
 import datetime
 import queue
@@ -236,6 +235,48 @@ latest_detection_results = {"Camera_1": None, "Camera_2": None}
 latest_detection_lock = threading.Lock()
 
 DETECTION_INTERVAL = 0.1  # seconds between detections (increase for less CPU, decrease for more FPS)
+
+# Dynamically import the correct detect function based on config.HAILO
+if getattr(config, "HAILO", False):
+    from app_detect import detect
+else:
+    from ultralytics import YOLO
+    class DetectionResult:
+        def __init__(self, xyxy, confs, clss):
+            self.xyxy = xyxy
+            self.conf = confs
+            self.cls = clss
+    class YOLODetector:
+        def __init__(self, model_path):
+            self.model = YOLO(model_path)
+            self.monitored_classes = [0, 2, 3, 5, 7]
+        def postprocess(self, results, frame_shape):
+            all_boxes, all_confs, all_clss = [], [], []
+            h, w = frame_shape[:2]
+            for r in results:
+                for box, conf, cls in zip(r.boxes.xyxy.cpu().numpy(), r.boxes.conf.cpu().numpy(), r.boxes.cls.cpu().numpy()):
+                    cls = int(cls)
+                    if cls not in self.monitored_classes:
+                        continue
+                    if conf < config.DETECTION_THRESHOLD:
+                        continue
+                    xmin, ymin, xmax, ymax = box
+                    all_boxes.append([xmin/w, ymin/h, xmax/w, ymax/h])
+                    all_confs.append(conf)
+                    all_clss.append(cls)
+            return DetectionResult(np.array(all_boxes), np.array(all_confs), np.array(all_clss))
+        def run_detection(self, frames):
+            results = []
+            for frame in frames:
+                yolo_results = self.model.predict(frame, verbose=False)
+                results.append(self.postprocess(yolo_results, frame.shape))
+            return results
+    _detector = None
+    def detect(frames):
+        global _detector
+        if _detector is None:
+            _detector = YOLODetector(config.MODEL_PATH)
+        return _detector.run_detection(frames)
 
 def detection_worker(cam_name, stream):
     while True:

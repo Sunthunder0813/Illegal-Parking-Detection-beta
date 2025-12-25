@@ -5,6 +5,9 @@ CAM2_URL = "rtsp://192.168.18.199:554/stream"
 # Path to YOLO model
 MODEL_PATH = "models/yolov8s.hef"
 
+# Use Hailo hardware for detection
+HAILO = True
+
 # Directory to save violation images
 SAVE_DIR = "static/violations"
 
