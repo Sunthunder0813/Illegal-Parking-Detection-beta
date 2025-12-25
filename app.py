@@ -111,8 +111,8 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
-        self.traces = {"Camera_1": {}, "Camera_2": {}}  # {cam: {track_id: [centers]}}
-        self.trace_length = 30  # Number of points to keep in trace
+        # self.traces = {"Camera_1": {}, "Camera_2": {}}  # Removed trace storage
+        # self.trace_length = 30  # Removed trace length
         self.reload_zones()
 
     def reload_zones(self):
@@ -132,26 +132,7 @@ class ParkingMonitor:
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
         now = time.time()
 
-        # --- Trace logic ---
-        traces = self.traces[name]
-        active_ids = set()
-        for tid, d in tracked.items():
-            x1, y1, x2, y2 = map(int, d['box'])
-            center = ((x1+x2)//2, (y1+y2)//2)
-            active_ids.add(tid)
-            if tid not in traces:
-                traces[tid] = []
-            traces[tid].append(center)
-            if len(traces[tid]) > self.trace_length:
-                traces[tid] = traces[tid][-self.trace_length:]
-        # Remove traces for objects no longer tracked
-        for tid in list(traces.keys()):
-            if tid not in active_ids:
-                del traces[tid]
-        # Draw traces
-        for pts in traces.values():
-            if len(pts) > 1:
-                cv2.polylines(frame, [np.array(pts, dtype=np.int32)], False, (0, 255, 255), 2)
+        # --- Trace logic removed ---
 
         for tid, d in tracked.items():
             x1, y1, x2, y2 = map(int, d['box'])
@@ -206,10 +187,13 @@ class Stream:
         self.last_update = None  # Track last frame update time
         self.reconnect_event = threading.Event()
         self.reconnecting = False  # Track reconnecting state
+        self.read_lock = threading.Lock()
+        self.running = True
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        while True:
+        # Try to read frames as fast as possible for higher FPS
+        while self.running:
             if self.reconnect_event.is_set():
                 self.reconnecting = True
                 self.cap.release()
@@ -217,20 +201,26 @@ class Stream:
                 self.reconnect_event.clear()
             ret, f = self.cap.read()
             if ret:
-                self.frame = f
-                self.last_update = time.time()
+                with self.read_lock:
+                    self.frame = f
+                    self.last_update = time.time()
                 self.reconnecting = False
             else:
                 self.reconnecting = True
-                time.sleep(2)
+                time.sleep(0.2)  # Shorter sleep for faster reconnect attempts
                 self.cap = cv2.VideoCapture(self.url)
 
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
-        return self.last_update is not None and (time.time() - self.last_update) < timeout
+        with self.read_lock:
+            return self.last_update is not None and (time.time() - self.last_update) < timeout
 
     def reconnect(self):
         self.reconnect_event.set()
+
+    def get_frame(self):
+        with self.read_lock:
+            return None if self.frame is None else self.frame.copy()
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -252,16 +242,18 @@ def background_detection_loop():
         start_time = time.time()
         active = []
         online_cameras = set()
-        # Only process new frames (avoid duplicate detection on same frame)
-        if c1.frame is not None and c1.is_online():
-            if not np.array_equal(last_frames["Camera_1"], c1.frame):
-                active.append(("Camera_1", c1.frame.copy()))
-                last_frames["Camera_1"] = c1.frame.copy()
+        # Use get_frame() for thread safety and always get the latest frame
+        c1_frame = c1.get_frame()
+        c2_frame = c2.get_frame()
+        if c1_frame is not None and c1.is_online():
+            if not np.array_equal(last_frames["Camera_1"], c1_frame):
+                active.append(("Camera_1", c1_frame))
+                last_frames["Camera_1"] = c1_frame
             online_cameras.add("Camera_1")
-        if c2.frame is not None and c2.is_online():
-            if not np.array_equal(last_frames["Camera_2"], c2.frame):
-                active.append(("Camera_2", c2.frame.copy()))
-                last_frames["Camera_2"] = c2.frame.copy()
+        if c2_frame is not None and c2.is_online():
+            if not np.array_equal(last_frames["Camera_2"], c2_frame):
+                active.append(("Camera_2", c2_frame))
+                last_frames["Camera_2"] = c2_frame
             online_cameras.add("Camera_2")
         
         # Clear timers for offline cameras to avoid stale violation timing/capture
