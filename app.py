@@ -11,6 +11,7 @@ import config
 import datetime
 import queue
 import subprocess
+import importlib
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -64,7 +65,6 @@ def update_config_py(new_settings):
     with open(config_path, "w") as f:
         f.writelines(lines)
     # Reload config module
-    import importlib
     importlib.reload(config)
 
 class ByteTrackLite:
@@ -111,13 +111,18 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
-        # Load parking zones from config.py and convert to numpy arrays
+        self.reload_zones()
+
+    def reload_zones(self):
+        importlib.reload(config)
         self.zones = {
             cam: np.array(points)
             for cam, points in getattr(config, "PARKING_ZONES", {}).items()
         }
 
     def process(self, name, res, frame):
+        # Always reload zones before processing to reflect latest config.py changes
+        self.reload_zones()
         fh, fw = frame.shape[:2]
         cv2.polylines(frame, [self.zones[name]], True, (0, 255, 0), 2)
         
