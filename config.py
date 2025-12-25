@@ -17,4 +17,4 @@ PARKING_ZONES = {
 "Camera_2": [[46, 437], [453, 253], [664, 259], [678, 438]]
 }
 
-USE_HAILO = False  # Set to False for Railway/web deployment
+USE_HAILO = True  # Set to True for Raspberry Pi/Hailo, False for Railway/web

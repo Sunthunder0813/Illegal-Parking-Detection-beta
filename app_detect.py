@@ -1,3 +1,6 @@
+# NOTE: Detection logic runs on the Raspberry Pi.
+# The web interface depends on this server being online.
+
 import numpy as np
 import cv2
 import threading
