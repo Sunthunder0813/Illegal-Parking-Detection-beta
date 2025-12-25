@@ -111,6 +111,8 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
+        self.traces = {"Camera_1": {}, "Camera_2": {}}  # {cam: {track_id: [centers]}}
+        self.trace_length = 30  # Number of points to keep in trace
         self.reload_zones()
 
     def reload_zones(self):
@@ -129,6 +131,27 @@ class ParkingMonitor:
         pixel_boxes = [[b[0]*fw, b[1]*fh, b[2]*fw, b[3]*fh] for b in res.xyxy]
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
         now = time.time()
+
+        # --- Trace logic ---
+        traces = self.traces[name]
+        active_ids = set()
+        for tid, d in tracked.items():
+            x1, y1, x2, y2 = map(int, d['box'])
+            center = ((x1+x2)//2, (y1+y2)//2)
+            active_ids.add(tid)
+            if tid not in traces:
+                traces[tid] = []
+            traces[tid].append(center)
+            if len(traces[tid]) > self.trace_length:
+                traces[tid] = traces[tid][-self.trace_length:]
+        # Remove traces for objects no longer tracked
+        for tid in list(traces.keys()):
+            if tid not in active_ids:
+                del traces[tid]
+        # Draw traces
+        for pts in traces.values():
+            if len(pts) > 1:
+                cv2.polylines(frame, [np.array(pts, dtype=np.int32)], False, (0, 255, 255), 2)
 
         for tid, d in tracked.items():
             x1, y1, x2, y2 = map(int, d['box'])
@@ -217,17 +240,28 @@ c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 latest_frames = {"Camera_1": None, "Camera_2": None}
 latest_frames_lock = threading.Lock()
 
+DETECTION_INTERVAL = 0.1  # seconds between detections (increase for less CPU, decrease for more FPS)
+
 def background_detection_loop():
     offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
     cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+    last_frames = {"Camera_1": None, "Camera_2": None}
+    last_detection_time = 0
+
     while True:
+        start_time = time.time()
         active = []
         online_cameras = set()
+        # Only process new frames (avoid duplicate detection on same frame)
         if c1.frame is not None and c1.is_online():
-            active.append(("Camera_1", c1.frame.copy()))
+            if not np.array_equal(last_frames["Camera_1"], c1.frame):
+                active.append(("Camera_1", c1.frame.copy()))
+                last_frames["Camera_1"] = c1.frame.copy()
             online_cameras.add("Camera_1")
         if c2.frame is not None and c2.is_online():
-            active.append(("Camera_2", c2.frame.copy()))
+            if not np.array_equal(last_frames["Camera_2"], c2.frame):
+                active.append(("Camera_2", c2.frame.copy()))
+                last_frames["Camera_2"] = c2.frame.copy()
             online_cameras.add("Camera_2")
         
         # Clear timers for offline cameras to avoid stale violation timing/capture
@@ -237,21 +271,27 @@ def background_detection_loop():
                 monitor.last_upload_time = {k: v for k, v in monitor.last_upload_time.items() if k[0] != cam_name}
 
         try:
-            if active:
+            now = time.time()
+            if active and (now - last_detection_time >= DETECTION_INTERVAL):
                 results = detect([f for _, f in active])
+                last_detection_time = now
                 with latest_frames_lock:
                     for i, res in enumerate(results):
                         name, frame = active[i]
                         monitor.process(name, res, frame)
-                        # Store the processed frame (resize for consistency)
                         latest_frames[name] = cv2.resize(frame, (640, 480))
             else:
                 with latest_frames_lock:
-                    latest_frames["Camera_1"] = offline_placeholder
-                    latest_frames["Camera_2"] = offline_placeholder
+                    if "Camera_1" not in online_cameras:
+                        latest_frames["Camera_1"] = offline_placeholder
+                    if "Camera_2" not in online_cameras:
+                        latest_frames["Camera_2"] = offline_placeholder
         except Exception as e:
             logger.error(f"Background Detection Error: {e}")
-        time.sleep(0.03)
+
+        elapsed = time.time() - start_time
+        sleep_time = max(0.01, DETECTION_INTERVAL - elapsed)
+        time.sleep(sleep_time)
 
 # Start background detection thread
 threading.Thread(target=background_detection_loop, daemon=True).start()
