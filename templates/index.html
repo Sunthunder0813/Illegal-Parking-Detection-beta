@@ -221,9 +221,6 @@
         <h1 class="text-center text-dark my-4" style="font-weight: bold;">
             Illegal Parking Detection - Live
         </h1>
-        <div id="serverStatusAlert" class="alert alert-danger text-center" style="display:none;">
-            <b>Server Offline</b>: Cannot connect to detection server.
-        </div>
         {% if notif %}
         <div class="alert alert-success alert-dismissible fade show mt-3" role="alert">
             {{ notif }}
@@ -235,7 +232,7 @@
                 <div class="camera-frame-wrapper">
                     <span class="camera-label">CCTV 1</span>
                     <div class="video-frame-container">
-                        <img src="" class="video-frame" alt="CCTV 1 Feed" id="liveVideoC1">
+                        <img src="{{ url_for('video_feed_c1') }}" class="video-frame" alt="CCTV 1 Feed" id="liveVideoC1">
                         <div class="reconnecting-overlay" id="reconnectingOverlayC1">
                             <div class="reconnecting-spinner">
                                 <div class="spinner-border" role="status"></div>
@@ -247,7 +244,7 @@
                 <div class="camera-frame-wrapper">
                     <span class="camera-label">CCTV 2</span>
                     <div class="video-frame-container">
-                        <img src="" class="video-frame" alt="CCTV 2 Feed" id="liveVideoC2">
+                        <img src="{{ url_for('video_feed_c2') }}" class="video-frame" alt="CCTV 2 Feed" id="liveVideoC2">
                         <div class="reconnecting-overlay" id="reconnectingOverlayC2">
                             <div class="reconnecting-spinner">
                                 <div class="spinner-border" role="status"></div>
@@ -281,70 +278,9 @@
         // Track previous reconnecting state to avoid unnecessary class toggling (prevents flicker)
         let prevC1 = null, prevC2 = null;
 
-        let SERVER_IP = null;
-        let SERVER_PORT = 5000;
-        let serverOnline = false;
-        let serverStatusInterval = null;
-        let cameraStatusInterval = null;
-
-        async function fetchServerIP() {
-            try {
-                const res = await fetch('/api/server_ip');
-                const data = await res.json();
-                SERVER_IP = data.server_ip;
-                setVideoFeedSources();
-                startServerStatusPolling();
-            } catch (e) {
-                SERVER_IP = "127.0.0.1";
-                setVideoFeedSources();
-                startServerStatusPolling();
-            }
-        }
-
-        // All requests now go through the Railway proxy endpoint
-        function setVideoFeedSources() {
-            document.getElementById('liveVideoC1').src = `/proxy/video_feed_c1`;
-            document.getElementById('liveVideoC2').src = `/proxy/video_feed_c2`;
-        }
-
-        function showServerStatus(online) {
-            const alertDiv = document.getElementById('serverStatusAlert');
-            if (online) {
-                alertDiv.style.display = 'none';
-            } else {
-                alertDiv.style.display = '';
-            }
-        }
-
-        async function pollServerStatus() {
-            try {
-                const res = await fetch(`/proxy/api/server_status`);
-                const status = await res.json();
-                serverOnline = status.online;
-                showServerStatus(serverOnline);
-                if (serverOnline && !cameraStatusInterval) {
-                    cameraStatusInterval = setInterval(checkCameraStatus, 1200);
-                }
-            } catch (e) {
-                serverOnline = false;
-                showServerStatus(false);
-                if (cameraStatusInterval) {
-                    clearInterval(cameraStatusInterval);
-                    cameraStatusInterval = null;
-                }
-            }
-        }
-
-        function startServerStatusPolling() {
-            pollServerStatus();
-            if (serverStatusInterval) clearInterval(serverStatusInterval);
-            serverStatusInterval = setInterval(pollServerStatus, 3000);
-        }
-
         async function checkCameraStatus() {
-            if (!serverOnline) return;
             try {
-                const res = await fetch(`/proxy/api/camera_status`);
+                const res = await fetch('/api/camera_status');
                 const status = await res.json();
 
                 if (prevC1 !== status.Camera_1.reconnecting) {
@@ -358,6 +294,7 @@
                     prevC2 = status.Camera_2.reconnecting;
                 }
             } catch (e) {
+                // On error, show overlays for both as fallback
                 overlayC1.classList.add('active');
                 overlayC2.classList.add('active');
                 liveVideoC1.style.filter = 'blur(6px) grayscale(0.4)';
@@ -369,9 +306,11 @@
 
         // Add this function to reload the video feeds (force refresh)
         function reloadVideoFeeds() {
-            if (!SERVER_IP) return;
-            liveVideoC1.src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c1?t=` + Date.now();
-            liveVideoC2.src = `http://${SERVER_IP}:${SERVER_PORT}/video_feed_c2?t=` + Date.now();
+            const liveVideoC1 = document.getElementById('liveVideoC1');
+            const liveVideoC2 = document.getElementById('liveVideoC2');
+            // Add a timestamp to force reload
+            liveVideoC1.src = "{{ url_for('video_feed_c1') }}" + "?t=" + Date.now();
+            liveVideoC2.src = "{{ url_for('video_feed_c2') }}" + "?t=" + Date.now();
         }
 
         // Listen for zone changes via localStorage event (from settings.html)
@@ -382,10 +321,6 @@
                 localStorage.setItem('zoneChanged', '0');
             }
         });
-
-        // Initialize on page load
-        setVideoFeedSources();
-        startServerStatusPolling();
     </script>
 </body>
 </html>
