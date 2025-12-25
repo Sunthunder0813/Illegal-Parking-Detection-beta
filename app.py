@@ -232,64 +232,38 @@ c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 # Shared latest processed frames for each camera
 latest_frames = {"Camera_1": None, "Camera_2": None}
 latest_frames_lock = threading.Lock()
+latest_detection_results = {"Camera_1": None, "Camera_2": None}
+latest_detection_lock = threading.Lock()
 
-DETECTION_INTERVAL = 0.1  # seconds between detections (increase for less CPU, decrease for more FPS)
-
-def background_detection_loop():
-    offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
-    last_frames = {"Camera_1": None, "Camera_2": None}
-    last_detection_time = 0
-
+def detection_worker(cam_name, stream):
     while True:
-        start_time = time.time()
-        active = []
-        online_cameras = set()
-        # Use get_frame() for thread safety and always get the latest frame
-        c1_frame = c1.get_frame()
-        c2_frame = c2.get_frame()
-        if c1_frame is not None and c1.is_online():
-            if not np.array_equal(last_frames["Camera_1"], c1_frame):
-                active.append(("Camera_1", c1_frame))
-                last_frames["Camera_1"] = c1_frame
-            online_cameras.add("Camera_1")
-        if c2_frame is not None and c2.is_online():
-            if not np.array_equal(last_frames["Camera_2"], c2_frame):
-                active.append(("Camera_2", c2_frame))
-                last_frames["Camera_2"] = c2_frame
-            online_cameras.add("Camera_2")
-        
-        # Clear timers for offline cameras to avoid stale violation timing/capture
-        for cam_name in ["Camera_1", "Camera_2"]:
-            if cam_name not in online_cameras:
-                monitor.timers = {k: v for k, v in monitor.timers.items() if k[0] != cam_name}
-                monitor.last_upload_time = {k: v for k, v in monitor.last_upload_time.items() if k[0] != cam_name}
+        frame = stream.get_frame()
+        if frame is not None and stream.is_online():
+            results = detect([frame])
+            with latest_detection_lock:
+                latest_detection_results[cam_name] = (results[0], frame)
+        time.sleep(DETECTION_INTERVAL)
 
-        try:
-            now = time.time()
-            if active and (now - last_detection_time >= DETECTION_INTERVAL):
-                results = detect([f for _, f in active])
-                last_detection_time = now
-                with latest_frames_lock:
-                    for i, res in enumerate(results):
-                        name, frame = active[i]
-                        monitor.process(name, res, frame)
-                        latest_frames[name] = cv2.resize(frame, (640, 480))
-            else:
-                with latest_frames_lock:
-                    if "Camera_1" not in online_cameras:
-                        latest_frames["Camera_1"] = offline_placeholder
-                    if "Camera_2" not in online_cameras:
-                        latest_frames["Camera_2"] = offline_placeholder
-        except Exception as e:
-            logger.error(f"Background Detection Error: {e}")
+def overlay_worker(cam_name):
+    while True:
+        with latest_detection_lock:
+            detection = latest_detection_results.get(cam_name)
+        if detection is not None:
+            res, frame = detection
+            frame_disp = frame.copy()
+            monitor.process(cam_name, res, frame_disp)
+            with latest_frames_lock:
+                latest_frames[cam_name] = cv2.resize(frame_disp, (640, 480))
+        else:
+            with latest_frames_lock:
+                latest_frames[cam_name] = np.zeros((480, 640, 3), dtype=np.uint8)
+        time.sleep(0.01)
 
-        elapsed = time.time() - start_time
-        sleep_time = max(0.01, DETECTION_INTERVAL - elapsed)
-        time.sleep(sleep_time)
-
-# Start background detection thread
-threading.Thread(target=background_detection_loop, daemon=True).start()
+# Start detection and overlay threads for each camera
+threading.Thread(target=detection_worker, args=("Camera_1", c1), daemon=True).start()
+threading.Thread(target=detection_worker, args=("Camera_2", c2), daemon=True).start()
+threading.Thread(target=overlay_worker, args=("Camera_1",), daemon=True).start()
+threading.Thread(target=overlay_worker, args=("Camera_2",), daemon=True).start()
 
 def gen():
     while True:

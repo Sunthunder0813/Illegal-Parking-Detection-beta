@@ -10,6 +10,8 @@ from app_detect import detect
 import config
 import datetime
 import queue
+import subprocess
+import importlib
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -23,11 +25,13 @@ CLASS_NAMES = {0: "PERSON", 2: "CAR", 3: "MOTORCYCLE", 5: "BUS", 7: "TRUCK"}
 def get_current_settings():
     return {
         "VIOLATION_TIME_THRESHOLD": getattr(config, "VIOLATION_TIME_THRESHOLD", 10),
-        "REPEAT_CAPTURE_INTERVAL": getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)
+        "REPEAT_CAPTURE_INTERVAL": getattr(config, "REPEAT_CAPTURE_INTERVAL", 60),
+        "PARKING_ZONES": getattr(config, "PARKING_ZONES", {})
     }
 
 def update_config_py(new_settings):
     import re
+    import json as pyjson
     config_path = os.path.join(os.path.dirname(__file__), "config.py")
     with open(config_path, "r") as f:
         lines = f.readlines()
@@ -35,16 +39,32 @@ def update_config_py(new_settings):
         pattern = re.compile(rf"^{key}\s*=\s*.*$")
         for i, line in enumerate(lines):
             if pattern.match(line):
-                lines[i] = f"{key} = {value}\n"
+                if key == "PARKING_ZONES":
+                    lines[i] = f"{key} = {pyjson.dumps(value)}\n"
+                else:
+                    lines[i] = f"{key} = {value}\n"
                 return
         # If not found, append
-        lines.append(f"{key} = {value}\n")
-    replace_line("VIOLATION_TIME_THRESHOLD", new_settings["VIOLATION_TIME_THRESHOLD"])
-    replace_line("REPEAT_CAPTURE_INTERVAL", new_settings["REPEAT_CAPTURE_INTERVAL"])
+        if key == "PARKING_ZONES":
+            lines.append(f"{key} = {pyjson.dumps(value)}\n")
+        else:
+            lines.append(f"{key} = {value}\n")
+    replace_line("VIOLATION_TIME_THRESHOLD", new_settings.get("VIOLATION_TIME_THRESHOLD", getattr(config, "VIOLATION_TIME_THRESHOLD", 10)))
+    replace_line("REPEAT_CAPTURE_INTERVAL", new_settings.get("REPEAT_CAPTURE_INTERVAL", getattr(config, "REPEAT_CAPTURE_INTERVAL", 60)))
+    # Only update PARKING_ZONES if present in new_settings
+    if "PARKING_ZONES" in new_settings:
+        current_zones = getattr(config, "PARKING_ZONES", {})
+        updated_zones = current_zones.copy()
+        for cam, val in new_settings["PARKING_ZONES"].items():
+            if val is None:
+                # Remove the camera zone
+                updated_zones.pop(cam, None)
+            else:
+                updated_zones[cam] = val
+        replace_line("PARKING_ZONES", updated_zones)
     with open(config_path, "w") as f:
         f.writelines(lines)
     # Reload config module
-    import importlib
     importlib.reload(config)
 
 class ByteTrackLite:
@@ -91,19 +111,29 @@ class ParkingMonitor:
         self.trackers = {"Camera_1": ByteTrackLite(), "Camera_2": ByteTrackLite()}
         self.timers = {}
         self.last_upload_time = {}
-        # Define parking zones for each camera
+        # self.traces = {"Camera_1": {}, "Camera_2": {}}  # Removed trace storage
+        # self.trace_length = 30  # Removed trace length
+        self.reload_zones()
+
+    def reload_zones(self):
+        importlib.reload(config)
         self.zones = {
-            "Camera_1": np.array([[249, 242], [255, 404], [654, 426], [443, 261]]),
-            "Camera_2": np.array([[46, 437], [453, 253], [664, 259], [678, 438]])
+            cam: np.array(points)
+            for cam, points in getattr(config, "PARKING_ZONES", {}).items()
         }
 
     def process(self, name, res, frame):
+        # Always reload zones before processing to reflect latest config.py changes
+        self.reload_zones()
         fh, fw = frame.shape[:2]
-        cv2.polylines(frame, [self.zones[name]], True, (0, 255, 0), 2)
+        # Change zone color to red
+        cv2.polylines(frame, [self.zones[name]], True, (0, 0, 255), 2)
         
         pixel_boxes = [[b[0]*fw, b[1]*fh, b[2]*fw, b[3]*fh] for b in res.xyxy]
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
         now = time.time()
+
+        # --- Trace logic removed ---
 
         for tid, d in tracked.items():
             x1, y1, x2, y2 = map(int, d['box'])
@@ -112,26 +142,30 @@ class ParkingMonitor:
 
             # Person detection (Yellow box, no timer)
             if d['cls'] == 0:
+                # Optimize: use thinner rectangle and skip putText for less lag
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
+                # Comment out or remove the following line to reduce lag:
+                # cv2.putText(frame, f"{label} #{tid}", (x1, y1-8), 0, 0.6, (255, 255, 0), 2)
                 continue
 
-            # Vehicle in Zone logic
-            if cv2.pointPolygonTest(self.zones[name], center, False) >= 0:
+            # Vehicle detection: always draw, but only time/countdown if in zone
+            in_zone = cv2.pointPolygonTest(self.zones[name], center, False) >= 0
+            if in_zone:
                 self.timers.setdefault((name, tid), now)
                 dur = int(now - self.timers[(name, tid)])
-                
                 is_violation = dur >= config.VIOLATION_TIME_THRESHOLD
                 color = (0, 0, 255) if is_violation else (0, 255, 255)
-                
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, f"{label} #{tid}: {dur}s", (x1, y1-8), 0, 0.6, color, 2)
-
                 if is_violation:
                     last_up = self.last_upload_time.get((name, tid), 0)
                     if now - last_up > config.REPEAT_CAPTURE_INTERVAL:
                         self.log_violation(name, tid, label, frame)
                         self.last_upload_time[(name, tid)] = now
             else:
+                # Draw detected vehicle outside zone (blue box, no timer/countdown)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(frame, f"{label} #{tid}", (x1, y1-8), 0, 0.6, (255, 0, 0), 2)
                 self.timers.pop((name, tid), None)
 
     def log_violation(self, cam, tid, label, frame):
@@ -156,10 +190,13 @@ class Stream:
         self.last_update = None  # Track last frame update time
         self.reconnect_event = threading.Event()
         self.reconnecting = False  # Track reconnecting state
+        self.read_lock = threading.Lock()
+        self.running = True
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        while True:
+        # Try to read frames as fast as possible for higher FPS
+        while self.running:
             if self.reconnect_event.is_set():
                 self.reconnecting = True
                 self.cap.release()
@@ -167,20 +204,26 @@ class Stream:
                 self.reconnect_event.clear()
             ret, f = self.cap.read()
             if ret:
-                self.frame = f
-                self.last_update = time.time()
+                with self.read_lock:
+                    self.frame = f
+                    self.last_update = time.time()
                 self.reconnecting = False
             else:
                 self.reconnecting = True
-                time.sleep(2)
+                time.sleep(0.2)  # Shorter sleep for faster reconnect attempts
                 self.cap = cv2.VideoCapture(self.url)
 
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
-        return self.last_update is not None and (time.time() - self.last_update) < timeout
+        with self.read_lock:
+            return self.last_update is not None and (time.time() - self.last_update) < timeout
 
     def reconnect(self):
         self.reconnect_event.set()
+
+    def get_frame(self):
+        with self.read_lock:
+            return None if self.frame is None else self.frame.copy()
 
 app = Flask(__name__)
 monitor = ParkingMonitor()
@@ -190,17 +233,30 @@ c1, c2 = Stream(config.CAM1_URL), Stream(config.CAM2_URL)
 latest_frames = {"Camera_1": None, "Camera_2": None}
 latest_frames_lock = threading.Lock()
 
+DETECTION_INTERVAL = 0.1  # seconds between detections (increase for less CPU, decrease for more FPS)
+
 def background_detection_loop():
     offline_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
     cv2.putText(offline_placeholder, "CAMERA OFFLINE", (60, 240), 0, 1.2, (0,0,255), 3, cv2.LINE_AA)
+    last_frames = {"Camera_1": None, "Camera_2": None}
+    last_detection_time = 0
+
     while True:
+        start_time = time.time()
         active = []
         online_cameras = set()
-        if c1.frame is not None and c1.is_online():
-            active.append(("Camera_1", c1.frame.copy()))
+        # Use get_frame() for thread safety and always get the latest frame
+        c1_frame = c1.get_frame()
+        c2_frame = c2.get_frame()
+        if c1_frame is not None and c1.is_online():
+            if not np.array_equal(last_frames["Camera_1"], c1_frame):
+                active.append(("Camera_1", c1_frame))
+                last_frames["Camera_1"] = c1_frame
             online_cameras.add("Camera_1")
-        if c2.frame is not None and c2.is_online():
-            active.append(("Camera_2", c2.frame.copy()))
+        if c2_frame is not None and c2.is_online():
+            if not np.array_equal(last_frames["Camera_2"], c2_frame):
+                active.append(("Camera_2", c2_frame))
+                last_frames["Camera_2"] = c2_frame
             online_cameras.add("Camera_2")
         
         # Clear timers for offline cameras to avoid stale violation timing/capture
@@ -210,21 +266,27 @@ def background_detection_loop():
                 monitor.last_upload_time = {k: v for k, v in monitor.last_upload_time.items() if k[0] != cam_name}
 
         try:
-            if active:
+            now = time.time()
+            if active and (now - last_detection_time >= DETECTION_INTERVAL):
                 results = detect([f for _, f in active])
+                last_detection_time = now
                 with latest_frames_lock:
                     for i, res in enumerate(results):
                         name, frame = active[i]
                         monitor.process(name, res, frame)
-                        # Store the processed frame (resize for consistency)
                         latest_frames[name] = cv2.resize(frame, (640, 480))
             else:
                 with latest_frames_lock:
-                    latest_frames["Camera_1"] = offline_placeholder
-                    latest_frames["Camera_2"] = offline_placeholder
+                    if "Camera_1" not in online_cameras:
+                        latest_frames["Camera_1"] = offline_placeholder
+                    if "Camera_2" not in online_cameras:
+                        latest_frames["Camera_2"] = offline_placeholder
         except Exception as e:
             logger.error(f"Background Detection Error: {e}")
-        time.sleep(0.03)
+
+        elapsed = time.time() - start_time
+        sleep_time = max(0.01, DETECTION_INTERVAL - elapsed)
+        time.sleep(sleep_time)
 
 # Start background detection thread
 threading.Thread(target=background_detection_loop, daemon=True).start()
@@ -323,6 +385,34 @@ def camera_status():
             "reconnecting": bool(getattr(c2, "reconnecting", False))
         }
     })
+
+@app.route('/api/zone_selector', methods=['POST'])
+def api_zone_selector():
+    try:
+        data = request.get_json(force=True)
+        camera = data.get("camera", "Camera_1")
+        cam_arg = "1" if camera == "Camera_1" else "2"
+        # Run zone_selector.py and capture output
+        proc = subprocess.Popen(
+            ["python", "zone_selector.py", cam_arg],
+            cwd=os.path.dirname(__file__),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        stdout, stderr = proc.communicate()
+        # Parse output for zone coordinates (expects a line with JSON array)
+        import re, json as pyjson
+        match = re.search(r"\[\s*\[.*?\]\s*\]", stdout, re.DOTALL)
+        if match:
+            zone = pyjson.loads(match.group(0))
+            # Update config and return new zone
+            update_config_py({"PARKING_ZONES": {camera: zone}})
+            return jsonify({"success": True, "zone": zone})
+        else:
+            return jsonify({"success": False, "error": "No zone found", "stdout": stdout, "stderr": stderr})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
