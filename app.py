@@ -277,5 +277,9 @@ def camera_status():
         "Camera_2": {"online": c2.is_online(), "reconnecting": c2.reconnecting}
     })
 
+@app.route('/settings.html')
+def settings_page():
+    return render_template('settings.html')
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
