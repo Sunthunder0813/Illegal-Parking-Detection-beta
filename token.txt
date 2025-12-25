@@ -1,12 +1,8 @@
-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
-
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-[HailoRT] [error] CHECK_SUCCESS failed with status=HAILO_DRIVER_OPERATION_FAILED(36)
-terminate called without an active exception
-Aborted
+Traceback (most recent call last):
+  File "/home/set-admin/Illegal-Parking-Detection-beta/app.py", line 9, in <module>
+    from app_detect import detect
+  File "/home/set-admin/Illegal-Parking-Detection-beta/app_detect.py", line 6, in <module>
+    import config
+  File "/home/set-admin/Illegal-Parking-Detection-beta/config.py", line 16
+    "Camera_1": [[249, 242], [255, 404], [654, 426], [443, 261]],
+IndentationError: unexpected indent
