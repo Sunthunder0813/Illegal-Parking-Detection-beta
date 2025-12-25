@@ -13,8 +13,8 @@ VIOLATION_TIME_THRESHOLD = 10
 REPEAT_CAPTURE_INTERVAL = 60
 # Define parking zones for each camera
 PARKING_ZONES = {
-"Camera_1": [[249, 242], [255, 404], [654, 426], [443, 261]],
-"Camera_2": [[46, 437], [453, 253], [664, 259], [678, 438]]
+    "Camera_1": [[249, 242], [255, 404], [654, 426], [443, 261]],
+    "Camera_2": [[46, 437], [453, 253], [664, 259], [678, 438]]
 }
 
 USE_HAILO = True  # Set to True for Raspberry Pi/Hailo, False for Railway/web
