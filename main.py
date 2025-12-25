@@ -1,10 +1,14 @@
+# NOTE: This script is intended to run on the Raspberry Pi.
+# The web interface and detection logic both run on the Pi.
+# If the Pi/server is offline, the web interface is also unavailable.
+
 import cv2
 import threading
 import time
 import os
 import numpy as np
 import logging
-from flask import Flask, Response, render_template, jsonify, request
+from flask import Flask, Response, render_template, jsonify, request, redirect
 import json
 from app_detect import detect
 import config
@@ -185,14 +189,18 @@ class ParkingMonitor:
 class Stream:
     def __init__(self, url):
         self.url = url
-        self.cap = cv2.VideoCapture(url)
+        self.cap = None
         self.frame = None
-        self.last_update = None  # Track last frame update time
+        self.last_update = None
         self.reconnect_event = threading.Event()
-        self.reconnecting = False  # Track reconnecting state
+        self.reconnecting = False
         self.read_lock = threading.Lock()
         self.running = True
-        threading.Thread(target=self._run, daemon=True).start()
+        if getattr(config, "USE_HAILO", True):
+            self.cap = cv2.VideoCapture(url)
+            threading.Thread(target=self._run, daemon=True).start()
+        else:
+            threading.Thread(target=self._mock_run, daemon=True).start()
 
     def _run(self):
         # Try to read frames as fast as possible for higher FPS
@@ -212,6 +220,16 @@ class Stream:
                 self.reconnecting = True
                 time.sleep(0.2)  # Shorter sleep for faster reconnect attempts
                 self.cap = cv2.VideoCapture(self.url)
+
+    def _mock_run(self):
+        # Generate a dummy frame every second
+        while self.running:
+            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(dummy, "MOCK CAMERA FRAME", (60, 240), 0, 1.2, (0,255,0), 3, cv2.LINE_AA)
+            with self.read_lock:
+                self.frame = dummy
+                self.last_update = time.time()
+            time.sleep(1)
 
     def is_online(self, timeout=2.0):
         """Returns True if the stream has updated recently."""
@@ -390,6 +408,20 @@ def api_zone_selector():
             return jsonify({"success": False, "error": "No zone found", "stdout": stdout, "stderr": stderr})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/server_status')
+def server_status():
+    # Always returns online if this server is running
+    return jsonify({"online": True})
+
+@app.route('/api/server_ip')
+def server_ip():
+    return jsonify({"server_ip": getattr(config, "SERVER_IP", "127.0.0.1")})
+
+@app.route('/open_link')
+def open_link():
+    # Redirect to the Railway internal URL
+    return redirect("illegal-parking-detection-beta-production.up.railway.app", code=302)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000, threaded=True)
