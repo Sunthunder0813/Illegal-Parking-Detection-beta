@@ -17,6 +17,7 @@ import queue
 import subprocess
 import importlib
 import requests
+from flask import Response, stream_with_context
 
 # --- Setup Logging & Folders ---
 logging.basicConfig(level=logging.INFO)
@@ -432,6 +433,31 @@ def open_link():
     # Redirect to the correct Railway production URL
     return redirect("https://illegal-parking-detection-beta-production.up.railway.app/", code=302)
 
+@app.route('/proxy/<path:path>', methods=['GET', 'POST'])
+def proxy(path):
+    """Reverse proxy to forward requests from Railway to the Pi server."""
+    pi_ip = getattr(config, "SERVER_IP", "127.0.0.1")
+    pi_url = f"http://{pi_ip}:5000/{path}"
+    method = request.method
+
+    try:
+        if method == 'GET':
+            # Stream video endpoints efficiently
+            if path.startswith("video_feed"):
+                r = requests.get(pi_url, stream=True, timeout=10)
+                return Response(stream_with_context(r.iter_content(chunk_size=4096)),
+                                content_type=r.headers.get('Content-Type', 'multipart/x-mixed-replace; boundary=frame'))
+            else:
+                r = requests.get(pi_url, params=request.args, timeout=10)
+                return (r.content, r.status_code, r.headers.items())
+        elif method == 'POST':
+            r = requests.post(pi_url, data=request.get_data(), headers=request.headers, timeout=10)
+            return (r.content, r.status_code, r.headers.items())
+        else:
+            return "Method Not Allowed", 405
+    except Exception as e:
+        return f"Proxy error: {e}", 502
+
 if __name__ == "__main__":
-    update_public_server_ip(getattr(config, "SERVER_IP", "127.0.0.1"))
+    # update_public_server_ip(getattr(config, "SERVER_IP", "127.0.0.1"))  # Commented out to avoid warning
     app.run(host='0.0.0.0', port=5000, threaded=True)
