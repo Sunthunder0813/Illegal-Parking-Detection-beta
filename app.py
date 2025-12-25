@@ -126,7 +126,8 @@ class ParkingMonitor:
         # Always reload zones before processing to reflect latest config.py changes
         self.reload_zones()
         fh, fw = frame.shape[:2]
-        cv2.polylines(frame, [self.zones[name]], True, (0, 255, 0), 2)
+        # Change zone color to red
+        cv2.polylines(frame, [self.zones[name]], True, (0, 0, 255), 2)
         
         pixel_boxes = [[b[0]*fw, b[1]*fh, b[2]*fw, b[3]*fh] for b in res.xyxy]
         tracked = self.trackers[name].update(pixel_boxes, res.conf, res.cls)
@@ -141,8 +142,10 @@ class ParkingMonitor:
 
             # Person detection (Yellow box, no timer)
             if d['cls'] == 0:
+                # Optimize: use thinner rectangle and skip putText for less lag
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 0), 1)
-                cv2.putText(frame, f"{label} #{tid}", (x1, y1-8), 0, 0.6, (255, 255, 0), 2)
+                # Comment out or remove the following line to reduce lag:
+                # cv2.putText(frame, f"{label} #{tid}", (x1, y1-8), 0, 0.6, (255, 255, 0), 2)
                 continue
 
             # Vehicle detection: always draw, but only time/countdown if in zone
