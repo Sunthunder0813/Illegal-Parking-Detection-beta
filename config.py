@@ -20,4 +20,4 @@ PARKING_ZONES = {
 USE_HAILO = True  # Set to True for Raspberry Pi/Hailo, False for Railway/web
 
 # Global variable for server IP (used by frontend or API clients)
-SERVER_IP = "xxxx.ngrok.io"  # Use your ngrok hostname or public IP
+SERVER_IP = "unattainted-elvina-unviewable.ngrok-free.dev"
